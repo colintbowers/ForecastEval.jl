@@ -37,7 +37,6 @@ export 	dieboldMariano,
 #----------------------------------------------------------
 #TYPE
 #	DMStandard
-#	DMOLS
 #	DMBootstrap
 #FIELDS
 #	Fields store parameteres necessary to perform a Diebold-Mariano test using the indicated method
@@ -70,22 +69,19 @@ end
 DMBootstrap{T<:Number}(lossDiff::Vector{T}) = DMBootstrap(BootstrapParam(lossDiff, bootstrapMethod="stationary", statistic="mean"))
 #------- METHODS --------------
 #string methods
-string(d::DMAsymptotic) = "dmAsymptotic"
-string(d::DMBootstrap) = "dmBootstrap"
+Base.string(d::DMAsymptotic) = "dmAsymptotic"
+Base.string(d::DMBootstrap) = "dmBootstrap"
 #show methods
-function show(io::IO, d::DMAsymptotic)
+function Base.show(io::IO, d::DMAsymptotic)
 	println(io, "Diebold-Mariano Asymptotic Method:")
 	pritnln(io, "    Lag window = " * string(d.lagWindow))
 end
-function show(io::IO, d::DMBootstrap)
+function Base.show(io::IO, d::DMBootstrap)
 	println(io, "Diebold-Mariano Bootstrap Method:")
 	show(io, d.bootstrapParam)
 end
 #show wrapper on STDOUT
-show(d::DMMethod) = show(STDOut, d)
-
-
-
+Base.show(d::DMMethod) = show(STDOut, d)
 #----------------------------------------------------------
 #FUNCTION
 #	dieboldMariano
@@ -117,6 +113,7 @@ function dieboldMariano{T<:Number}(lossDiff::Vector{T}, method::DMBootstrap; con
 	!(0.0 < confLevel < 1.0) && error("Confidence level must lie between 0 and 1")
 	length(lossDiff) < 2 && error("Loss differential series must contain at least two observations")
 	getBlockLength(method.bootstrapParam) <= 0 && dBootstrapBlockLength!(method.bootstrapParam, lossDiff) #detect block-length if necessary
+	method.bootstrapParam.statistic != "mean" && error("statistic field in BootstrapParam must be set to mean")
 	statVec = dBootstrapStatistic(lossDiff, method.bootstrapParam)
 	sort!(statVec)
 	i = searchsortedlast(statVec, 0.0)
@@ -167,7 +164,30 @@ end
 
 
 
-
+#----------------------------------------------------------
+#TYPE
+#	RCBootstrap
+#FIELDS
+#	Fields store parameteres necessary to perform a Reality-Check test using the indicated method
+#METHODS
+#PURPOSE
+#	These types are used to call different methods of realityCheck, depending on how the user wants to perform the test.
+#NOTES
+#----------------------------------------------------------
+type RCBootstrap
+	bootstrapParam::BootstrapParam
+	blockLengthFilter::ASCIIString
+	function RCBootstrap(bootstrapParam::BootstrapParam, blockLengthFilter::ASCIIString)
+		!(blockLengthFilter == "mean" || blockLengthFilter == "median" || blockLengthFilter == "maximum" || blockLengthFilter == "first") && error("Invalid value for blockLengthFilter")
+		new(bootstrapParam, blockLengthFilter)
+	end
+end
+Base.string(x::RCBootstrap) = "rcBootstrap"
+function Base.show(io::IO, x::RCBootstrap)
+	println(io, "Reality check via bootstrap. Bootstrap parameters are:")
+	show(io, x.bootstrapParam)
+end
+Base.show(x::RCBootstrap) = show(STDOUT, x)
 #----------------------------------------------------------
 #FUNCTION
 #	realityCheck
@@ -179,10 +199,64 @@ end
 #REFERENCES
 #	White (2000) "A Reality Check for Data Snooping", Econometrica, 68 (5), pp. 1097-1126
 #----------------------------------------------------------
+function realityCheck{T<:Number}(lD::Matrix{T}, method::RCBootstrap)
+	numObs = size(lD, 1)
+	numModel = size(lD, 2)
+	rootNumObs = sqrt(numObs)
+	numObs < 3 && error("Not enough observations to perform a reality check")
+	numModel < 1 && error("Input data matrix is empty")
+	realityCheck_blocklength!(lD, method) #Gets appropriate block-length (if needed)
+	method.bootstraParam.numObsData != numObs && error("numObsData field in BootstrapParam is not equal to number of rows in loss differential matrix")
+	typeof(method.bootstrapParam.bootstrapMethod) == TaperedBlock && error("realityCheck currently not possible using tapered block bootstrap")
+	inds = dBootstrapIndex(method.bootstrapParam)
+	fBoot = Array(Float64, size(inds, 2))
+	vBoot = Array(Float64, size(inds, 2))
+	vBoot *= -Inf #All -Inf values will get updated on first iteration
+	pValVec = Array(Float64, numModel)
+	vBarOld = -Inf
+	for k = 1:numModel
+		fBar = mean(sub(lD, 1:numObs, k))
+		vBar = max(vBarOld, rootNumObs * fBar)
+		realityCheck_updateboot!(lD, inds, numObs, rootNumObs, k, fBar, fBoot, vBoot)
+		#DO TEST AND GET PVALUE HERE
+	end
+
+	#FINISH UP HERE
+end
+function realityCheck_updateboot!{T<:Number}(lD::Matrix{T}, inds::Matrix{Int}, numObs::Int, rootNumObs::Float64, modelNum::Int, fBar::Float64, fBoot::Vector{Float64}, vBoot::Vector{Float64})
+	lDSub = sub(lD, 1:numObs, modelNum)
+	for i = 1:size(inds, 2)
+		fBoot[i] = mean(lDSub[sub(inds, 1:numObs, i)])
+		vBoot[i] = max(vBoot[i], rootNumObs * (fBoot[i] - fBar))
+	end
+	return(true)
+end
 
 
 
 
+function realityCheck_blocklength!{T<:Number}(lD::Matrix{T}, method::RCBootstrap)
+	if getBlockLength(method.bootstrapParam) <= 0
+		if blockLengthFilter == "first"
+			bL = dBootstrapBlockLength(lD[:, 1], method.bootstrapParam)
+		else
+			blockLengthVec = [ dBootstrapBlockLength(lD[:, n], method.bootstrapParam) for n = 1:size(lD, 2) ]
+			if blockLengthFilter == "mean"
+				bL = mean(blockLengthVec)
+			elseif blockLengthFilter == "median"
+				bL = median(blockLengthVec)
+			elseif blockLengthFilter == "maximum"
+				bL = max(blockLengthVec)
+			else
+				error("Invalid value for blockLengthFilter")
+			end
+		end
+		replaceBlockLength!(method.bootstrapParam, bL)
+	else
+		bL = convert(Float64, getBlockLength(method.bootstrapParam))
+	end
+	return(bL)
+end
 
 
 
