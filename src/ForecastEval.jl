@@ -11,6 +11,7 @@ module ForecastEval
 using 	StatsBase,
 		Distributions,
 		LossFunctions,
+		KernelStat,
 		DependentBootstrap
 
 #Load any specific variables/functions that are needed (use import ModuleName1.FunctionName1, ModuleName2.FunctionName2, etc)
@@ -21,7 +22,15 @@ import 	Base.string,
 export 	dieboldmariano,
 		DMMethod,
 		DMAsymptotic,
-		DMBootstrap
+		DMBootstrap,
+		realitycheck,
+		RCMethod,
+		RCBootstrap,
+		RCBootstrapAlt,
+		spa,
+		SPAMethod,
+		SPABootstrap
+
 
 
 #******************************************************************************
@@ -131,6 +140,7 @@ type RCBootstrap <: RCMethod
 		new(bootstrapParam, blockLengthFilter)
 	end
 end
+RCBootstrap(numObs::Int) = RCBootstrap(BootstrapParam(numObs), :median)
 type RCBootstrapAlt <: RCMethod
 	bootstrapParam::BootstrapParam
 	blockLengthFilter::Symbol
@@ -139,6 +149,7 @@ type RCBootstrapAlt <: RCMethod
 		new(bootstrapParam, blockLengthFilter)
 	end
 end
+RCBootstrapAlt(numObs::Int) = RCBootstrapAlt(BootstrapParam(numObs), :median)
 #type methods
 Base.string(x::RCBootstrap) = "rcBootstrap"
 function Base.show(io::IO, x::RCBootstrap)
@@ -149,15 +160,18 @@ Base.show(x::RCBootstrap) = show(STDOUT, x)
 #-------- FUNCTION -------------
 #realitycheck for bootstrap method
 function realitycheck{T<:Number}(lD::Matrix{T}, method::RCBootstrap)
+	#Validate inputs
 	numObs = size(lD, 1)
 	numModel = size(lD, 2)
 	rootNumObs = sqrt(numObs)
 	numObs < 3 && error("Not enough observations to perform a reality check")
 	numModel < 1 && error("Input data matrix is empty")
-	rC_blocklength!(lD, method) #Gets appropriate block-length (if needed)
+	#Get block-length and bootstrap indices
+	getblocklength(method.bootstrapParam) <= 0 && multivariate_blocklength!(lD, method.bootstrapParam, method.blockLengthFilter)
 	method.bootstraParam.numObsData != numObs && error("numObsData field in BootstrapParam is not equal to number of rows in loss differential matrix")
 	typeof(method.bootstrapParam.bootstrapMethod) == TaperedBlock && error("realitycheck currently not possible using tapered block bootstrap")
 	inds = dbootstrapindex(method.bootstrapParam)
+	#Perform reality check
 	fBoot = Array(Float64, size(inds, 2))
 	vBoot = Array(Float64, size(inds, 2))
 	vBoot *= -Inf #All -Inf values will get updated on first iteration
@@ -245,6 +259,74 @@ realitycheck{T<:Number}(xPrediction::Matrix{T}, xBaseCase::Vector{T}, x::Vector{
 #NOTES
 #	You can skip the block length selection procedure by specifying a block-length > 0
 #----------------------------------------------------------
+#-------- METHOD TYPES ---------
+abstract SPAMethod
+type SPABootstrap <: SPAMethod
+	bootstrapParam::BootstrapParam
+	blockLengthFilter::Symbol
+	hacVarianceMethod::HACVarianceMethod
+	function SPABootstrap(bootstrapParam::BootstrapParam, blockLengthFilter::Symbol, hacVarianceMethod::HACVarianceMethod)
+		!(blockLengthFilter == :mean || blockLengthFilter == :median || blockLengthFilter == :maximum || blockLengthFilter == :first) && error("Invalid value for blockLengthFilter")
+		new(bootstrapParam, blockLengthFilter, hacVarianceMethod)
+	end
+end
+SPABootstrap(numObs::Int) = SPABootstrap(BootstrapParam(numObs), :median, HACVarianceBasic(KernelPR1994SB(numObs, 0.99999), BandwidthMax()))
+#type methods
+Base.string(x::SPABootstrap) = "spaBootstrap"
+function Base.show(io::IO, x::SPABootstrap)
+	println(io, "Test for Superior Predictive Ability via bootstrap. Bootstrap parameters are:")
+	show(io, x.bootstrapParam)
+	println(io, "Block length filter is:" * string(x.blockLengthFilter))
+	println(io, "Kernel function for hac variance estimation is: " * string(x.kernelFunction))
+	println(io, "Bandwidth method for hac variance estimation is: ")
+	show(io, x.bandwidthMethod)
+end
+Base.show(x::RCBootstrap) = show(STDOUT, x)
+#-------- FUNCTION -------------
+#realitycheck for bootstrap method
+function spa{T<:Number}(lD::Matrix{T}, method::SPAMethod)
+	#Validate inputs
+	numObs = size(lD, 1)
+	rootNumObs = sqrt(numObs)
+	numModel = size(lD, 2)
+	numObs < 3 && error("Not enough observations to perform a reality check")
+	numModel < 1 && error("Input data matrix is empty")
+	#Get block length and bootstrap indices
+	getblocklength(method.bootstrapParam) <= 0 && multivariate_blocklength!(lD, method.bootstrapParam, method.blockLengthFilter)
+	method.bootstraParam.numObsData != numObs && error("numObsData field in BootstrapParam is not equal to number of rows in loss differential matrix")
+	typeof(method.bootstrapParam.bootstrapMethod) == TaperedBlock && error("spa test currently not possible using tapered block bootstrap")
+	inds = dbootstrapindex(method.bootstrapParam)
+	#Get hac variance estimators
+	if typeof(method.hacVarianceMethod) == HACVarianceBasic
+		if typeof(method.hacVarianceMethod.kernelFunction) == KernelPR1994SB
+			if method.hacVarianceMethod.kernelFunction.p2 == 0.99999 #This is the default value and is replaced now unless user explicitly replaced it
+				method.hacVarianceMethod.kernelFunction.p2 = 1 / getblocklength(method.bootstrapParam) #Match block length parameter to bootstrap method block length parameter
+			end
+			method.hacVarianceMethod.kernelFunction.p1 != numObs && error("Invalid number of observations parameter in kernel function in HAC variance method")
+		end
+	end
+	wSqVec = [ hacvariance(sub(lD, 1:numObs, k), method.hacVarianceMethod) for k = 1:numModel ]
+	wInv = [ 1 / sqrt(wSqVec) for k = 1:numModel ]
+	#Get different mean definitions
+	mu_u = mean(lD, 1)
+	mu_l = [ max(mu_u[k], 0) for k = 1:numModel ]
+	multTerm_mu_c = (2 * log(log(numObs))) * (1/numObs)
+	mu_c = [ (mu_u[k] >= sqrt(multTerm_mu_c * wSqVec[k])) * mu_u[k] for k = 1:numModel ]
+	#Get bootstrapped mean loss differentials centred on different means, studentized, and scaled
+	mldBoot = [ mean(sub(lD, 1:numObs, k)[sub(inds, 1:numObs, i)]) for k = 1:numModel, i = 1:numResample ]
+	z_u_adj = rootNumObs * (wInv .* (mldBoot .- mu_u))
+	z_l_adj = rootNumObs * (wInv .* (mldBoot .- mu_l))
+	z_c_adj = rootNumObs * (wInv .* (mldBoot .- mu_c))
+	#Get p-values for each approach
+	tSPA = maximum(max((rootNumObs * mu_u) ./ sqrt(wVec), zeros(Float64, length(mu_u))))
+	tSPA_u = [ max(0, maximum(sub(z_u_adj, 1:numModel, i))) for i = 1:numResample ]
+	tSPA_l = [ max(0, maximum(sub(z_l_adj, 1:numModel, i))) for i = 1:numResample ]
+	tSPA_c = [ max(0, maximum(sub(z_c_adj, 1:numModel, i))) for i = 1:numResample ]
+	pVal_u = (1 / numResample) * sum(tSPA_u .> tSPA)
+	pVal_l = (1 / numResample) * sum(tSPA_l .> tSPA)
+	pVal_c = (1 / numResample) * sum(tSPA_c .> tSPA)
+	return([pVal_u, pVal_l, pVal_c])
+end
 
 
 
@@ -253,7 +335,23 @@ realitycheck{T<:Number}(xPrediction::Matrix{T}, xBaseCase::Vector{T}, x::Vector{
 
 
 
-
+#non-exported method for obtaining the appropriate block-length for a multivariate time-series
+function multivariate_blocklength!{T<:Number}(x::Matrix{T}, bp::BootstrapParam, blockLengthFilter::Symbol)
+	if multMethod == :first
+		bL = dbootstrapblocklength(x[:, 1], bp.bootstrapParam)
+		blockLengthVec = [bL]
+	else
+		blockLengthVec = [ dbootstrapblocklength(x[:, n], bp.bootstrapParam) for n = 1:size(x, 2) ]
+		if blockLengthFilter == :mean;	bL = mean(blockLengthVec)
+		elseif blockLengthFilter == :median; bL = median(blockLengthVec)
+		elseif blockLengthFilter == :maximum; bL = maximum(blockLengthVec)
+		elseif blockLengthFilter == :minimum; bL = minimum(blockLengthVec)
+		else; error("Invalid value for blockLengthFilter")
+		end
+	end
+	update!(bp.bootstrapMethod, bL)
+	return(bL, blockLengthVec)
+end
 
 
 
