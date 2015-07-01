@@ -16,14 +16,16 @@ using 	StatsBase,
 
 #Load any specific variables/functions that are needed (use import ModuleName1.FunctionName1, ModuleName2.FunctionName2, etc)
 import 	Base.string,
-		Base.show
+		Base.show,
+		DependentBootstrap.update!
 
 #Specify the variables/functions to export (use export FunctionName1, FunctionName2, etc)
-export 	dieboldmariano,
+export 	dm,
 		DMMethod,
-		DMAsymptotic,
+		DMAsymptoticBasic,
+		DMAsymptoticHAC,
 		DMBootstrap,
-		realitycheck,
+		rc,
 		RCMethod,
 		RCBootstrap,
 		RCBootstrapAlt,
@@ -53,14 +55,24 @@ export 	dieboldmariano,
 #----------------------------------------------------------
 #-------- METHOD TYPES ---------
 abstract DMMethod
-type DMAsymptotic <: DMMethod
+#Asymptotic approximation with basic HAC estimator
+type DMAsymptoticBasic <: DMMethod
 	lagWindow::Int
-	function DMAsymptotic(lagWindow::Int)
+	function DMAsymptoticBasic(lagWindow::Int)
 		lagWindow < 0 && error("Lag window must be non-negative")
 		new(lagWindow)
 	end
 end
-DMAsymptotic() = DMAsymptotic(0)
+DMAsymptoticBasic() = DMAsymptoticBasic(0)
+#Asymptotic approximation with custom HAC estimator
+type DMAsymptoticHAC <: DMMethod
+	hacMethod::HACVarianceMethod
+	DMAsymptoticHAC(hacMethod::HACVarianceMethod) = new(hacMethod)
+end
+DMAsymptoticHAC() = DMAsymptoticHAC(HACVarianceBasic())
+DMAsymptoticHAC(numObs::Int) = DMAsymptoticHAC(HACVarianceBasic(numObs))
+DMAsymptoticHAC{T<:Number}(lD::Vector{T}) = DMAsymptoticHAC(HACVarianceBasic(length(lD)))
+#Bootstrap approximation
 type DMBootstrap <: DMMethod
 	bootstrapParam::BootstrapParam
 	function DMBootstrap(bootstrapParam::BootstrapParam)
@@ -70,20 +82,25 @@ end
 DMBootstrap(numObs::Int) = DMBootstrap(BootstrapParam(numObs, statistic=mean))
 DMBootstrap{T<:Number}(x::Vector{T}) = DMBoostrap(BootstrapParap(x, statistic=mean))
 #type methods
-Base.string(d::DMAsymptotic) = "dmAsymptotic"
+Base.string(d::DMAsymptoticBasic) = "dmAsymptoticBasic"
+Base.string(d::DMAsymptoticHAC) = "dmAsymptoticHAC"
 Base.string(d::DMBootstrap) = "dmBootstrap"
-function Base.show(io::IO, d::DMAsymptotic)
-	println(io, "Diebold-Mariano Asymptotic Method:")
-	pritnln(io, "    Lag window = " * string(d.lagWindow))
-end
 function Base.show(io::IO, d::DMBootstrap)
-	println(io, "Diebold-Mariano Bootstrap Method:")
-	show(io, d.bootstrapParam)
+	println(io, "Diebold-Mariano method = " * string(d))
+	show(d.bootstrapParam)
 end
-Base.show(d::DMMethod) = show(STDOut, d)
+
+function Base.show(io::IO, d::DMMethod)
+	println(io, "Diebold-Mariano method = " * string(d))
+	fieldNames = names(d)
+	for n = 1:length(fieldNames)
+		println("    field " * string(fieldNames[n]) * " = " * string(getfield(d, n)))
+	end
+end
+Base.show(d::DMMethod) = show(STDOUT, d)
 #--------- FUNCTION -----------------------
-#Diebold-Mariano test using asymptotic approximation (see section 1.1 of their paper)
-function dieboldmariano{T<:Number}(lossDiff::Vector{T}, method::DMAsymptotic; confLevel::Number=0.05)
+#Diebold-Mariano test using asymptotic approximation and basic HAC estimator (see section 1.1 of their paper)
+function dm{T<:Number}(lossDiff::Vector{T}, method::DMAsymptoticBasic; confLevel::Number=0.05)
 	!(0.0 < confLevel < 1.0) && error("Confidence level must lie between 0 and 1")
 	length(lossDiff) < 2 && error("Loss differential series must contain at least two observations")
 	m = mean(lossDiff)
@@ -94,27 +111,43 @@ function dieboldmariano{T<:Number}(lossDiff::Vector{T}, method::DMAsymptotic; co
 	end
 	v <= 0 && (v = 0) #If variance estimate is negative, bind to zero so we auto-reject the null
 	testStat = m / sqrt(v / length(lossDiff))
-	return(pval(Normal(), testStat, twoSided=true))
+	(pVal, tailRegion) = pvalue(Normal(), testStat, twoSided=true)
+	pVal > confLevel && (tailRegion = 0)
+	return(pVal, tailRegion)
 end
-#Diebold-Mariano test using a dependent bootstrap
-function dieboldmariano{T<:Number}(lossDiff::Vector{T}, method::DMBootstrap; confLevel::Number=0.05)
+#Diebold-Mariano test using asymptotic approximation and custom HAC estimator (see section 1.1 of their paper)
+function dm{T<:Number}(lossDiff::Vector{T}, method::DMAsymptoticHAC; confLevel::Number=0.05)
 	!(0.0 < confLevel < 1.0) && error("Confidence level must lie between 0 and 1")
 	length(lossDiff) < 2 && error("Loss differential series must contain at least two observations")
-	getBlockLength(method.bootstrapParam) <= 0 && dbootstrapblocklength!(method.bootstrapParam, lossDiff) #detect block-length if necessary
+	m = mean(lossDiff)
+	(v, _) = hacvariance(lossDiff, method.hacMethod)
+	v <= 0 && (v = 0) #If variance estimate is negative, bind to zero so we auto-reject the null
+	testStat = m / sqrt(v / length(lossDiff))
+	(pVal, tailRegion) = pvalue(Normal(), testStat, twoSided=true)
+	pVal > confLevel && (tailRegion = 0)
+	return(pVal, tailRegion)
+end
+#Diebold-Mariano test using a dependent bootstrap
+function dm{T<:Number}(lossDiff::Vector{T}, method::DMBootstrap; confLevel::Number=0.05)
+	!(0.0 < confLevel < 1.0) && error("Confidence level must lie between 0 and 1")
+	length(lossDiff) < 2 && error("Loss differential series must contain at least two observations")
+	getblocklength(method.bootstrapParam) <= 0 && dbootstrapblocklength!(method.bootstrapParam, lossDiff) #detect block-length if necessary
 	method.bootstrapParam.statistic != mean && error("statistic field in BootstrapParam must be set to mean")
 	testStat = mean(lossDiff)
 	statVec = dbootstrapstatistic(lossDiff, method.bootstrapParam) - testStat #Centre statVec on zero
 	sort!(statVec)
-	return(pval(statVec, testStat))
+	(pVal, tailRegion) = pvalue(statVec, testStat)
+	pVal > confLevel && (tailRegion = 0)
+	return(pVal, tailRegion)
 end
 #Keyword wrapper
-function dieboldmariano{T1<:Number, T2<:Number}(lossDiff::Vector{T1}; method::DMMethod=DMBootstrap(length(lossDiff)), numResample::Int=1000, blockLength::T2=-1, lagWindow::Int=0, confLevel::Number=0.05)
+function dm{T1<:Number, T2<:Number}(lossDiff::Vector{T1}; method::DMMethod=DMBootstrap(length(lossDiff)), numResample::Int=1000, blockLength::T2=-1, lagWindow::Int=0, confLevel::Number=0.05)
 	typeof(method) == DMBootstrap && update!(method.bootstrapParam, numResample=numResample, blockLength=blockLength)
-	typeof(method) == DMAsymptotic && (method.lagWindow=lagWindow)
-	return(dieboldmariano(lossDiff, method, confLevel=confLevel))
+	typeof(method) == DMAsymptoticBasic && (method.lagWindow=lagWindow)
+	return(dm(lossDiff, method, confLevel=confLevel))
 end
 #Wrapper for calculating loss differential
-dieboldmariano{T1<:Number, T2<:Number}(xhat1::Vector{T1}, xhat2::Vector{T1}, x::Vector{T1}, lossFunc::LossFunction=SquaredError(); method::DMMethod=DMBootstrap(length(x)), numResample::Int=1000, blockLength::T2=-1, lagWindow::Int=0, confLevel::Number=0.05) = dieboldmariano(lossdiff(xhat1, xhat2, x, lossFunc), method=method, numResample=numResample, blockLength=blockLength, lagWindow=lagWindow, confLevel=confLevel)
+dm{T1<:Number, T2<:Number}(xhat1::Vector{T1}, xhat2::Vector{T1}, x::Vector{T1}, ; lossFunction::LossFunction=SquaredError(), method::DMMethod=DMBootstrap(length(x)), numResample::Int=1000, blockLength::T2=-1, lagWindow::Int=0, confLevel::Number=0.05) = dm(lossdiff(xhat1, xhat2, x, lossFunction), method=method, numResample=numResample, blockLength=blockLength, lagWindow=lagWindow, confLevel=confLevel)
 
 
 
@@ -158,8 +191,8 @@ function Base.show(io::IO, x::RCBootstrap)
 end
 Base.show(x::RCBootstrap) = show(STDOUT, x)
 #-------- FUNCTION -------------
-#realitycheck for bootstrap method
-function realitycheck{T<:Number}(lD::Matrix{T}, method::RCBootstrap)
+#rc for bootstrap method
+function rc{T<:Number}(lD::Matrix{T}, method::RCBootstrap)
 	#Validate inputs
 	numObs = size(lD, 1)
 	numModel = size(lD, 2)
@@ -168,8 +201,8 @@ function realitycheck{T<:Number}(lD::Matrix{T}, method::RCBootstrap)
 	numModel < 1 && error("Input data matrix is empty")
 	#Get block-length and bootstrap indices
 	getblocklength(method.bootstrapParam) <= 0 && multivariate_blocklength!(lD, method.bootstrapParam, method.blockLengthFilter)
-	method.bootstraParam.numObsData != numObs && error("numObsData field in BootstrapParam is not equal to number of rows in loss differential matrix")
-	typeof(method.bootstrapParam.bootstrapMethod) == TaperedBlock && error("realitycheck currently not possible using tapered block bootstrap")
+	method.bootstrapParam.numObsData != numObs && error("numObsData field in BootstrapParam is not equal to number of rows in loss differential matrix")
+	typeof(method.bootstrapParam.bootstrapMethod) == BootstrapTaperedBlock && error("rc currently not possible using tapered block bootstrap")
 	inds = dbootstrapindex(method.bootstrapParam)
 	#Perform reality check
 	fBoot = Array(Float64, size(inds, 2))
@@ -198,54 +231,43 @@ function rC_updateboot!{T<:Number}(lD::Matrix{T}, inds::Matrix{Int}, numObs::Int
 	end
 	return(true)
 end
-#Non-exported function used to choose a block length for bootstrap. Note, if method.bootstrapParam is already > 0, then this routine is skipped.
-function rC_blocklength!{T<:Number}(lD::Matrix{T}, method::RCBootstrap)
-	if getBlockLength(method.bootstrapParam) <= 0
-		if blockLengthFilter == :first
-			bL = dbootstrapblocklength(lD[:, 1], method.bootstrapParam)
-		else
-			blockLengthVec = [ dbootstrapblocklength(lD[:, n], method.bootstrapParam) for n = 1:size(lD, 2) ]
-			if blockLengthFilter == :mean;	bL = mean(blockLengthVec)
-			elseif blockLengthFilter == :median; bL = median(blockLengthVec)
-			elseif blockLengthFilter == :maximum; bL = max(blockLengthVec)
-			else; error("Invalid value for blockLengthFilter")
-			end
-		end
-		replaceBlockLength!(method.bootstrapParam, bL)
-	else
-		bL = convert(Float64, getBlockLength(method.bootstrapParam))
-	end
-	return(bL)
-end
 #Alternative bootstrap methodology (duplicated my MatLab code)
-function realitycheck{T<:Number}(lD::Matrix{T}, method::RCBootstrapAlt)
+function rc{T<:Number}(lD::Matrix{T}, method::RCBootstrapAlt)
 	numObs = size(lD, 1)
 	numModel = size(lD, 2)
 	rootNumObs = sqrt(numObs)
 	numResample = method.bootstrapParam.numResample
 	numObs < 3 && error("Not enough observations to perform a reality check")
 	numModel < 1 && error("Input data matrix is empty")
-	rC_blocklength!(lD, method) #Gets appropriate block-length (if needed)
-	method.bootstraParam.numObsData != numObs && error("numObsData field in BootstrapParam is not equal to number of rows in loss differential matrix")
-	typeof(method.bootstrapParam.bootstrapMethod) == TaperedBlock && error("realitycheck currently not possible using tapered block bootstrap")
+	getblocklength(method.bootstrapParam) <= 0 && multivariate_blocklength!(lD, method.bootstrapParam, method.blockLengthFilter)
+	method.bootstrapParam.numObsData != numObs && error("numObsData field in BootstrapParam is not equal to number of rows in loss differential matrix")
+	typeof(method.bootstrapParam.bootstrapMethod) == BootstrapTaperedBlock && error("rc currently not possible using tapered block bootstrap")
 	inds = dbootstrapindex(method.bootstrapParam)
-	mld = [ mean(lD[:, k]) k = 1:numModel ]
-	mldBoot = [ mean(sub(lD, 1:numObs, k)[sub(inds, 1:numObs, i)]) for i = 1:numResample, k = 1:numModel ]
-	v = maximum(rootNumObs * mldBoot, 1)
+	mld = [ mean(sub(lD, 1:numObs, k)) for k = 1:numModel ]
+
+	println(eltype(mld))
+	println(length(mld))
+
+	mldBoot = [ mean(lD[:, k][inds[:, i]]) for i = 1:numResample, k = 1:numModel ]
+
+	println(eltype(mldBoot))
+	println(ndims(mldBoot))
+	println(size(mldBoot, 1))
+	println(size(mldBoot, 2))
+
+
 	vBoot = maximum(rootNumObs * (mldBoot .- mld), 2)
 	pVal = sum(vBoot .> v) / numResample
 	return([pVal])
 end
 #Keyword wrapper
-function realitycheck{T<:Number}(lD::Matrix{T}; method::RCMethod=RCBootstrap(), numResample::Int=1000, blockLength::Number=-1, blockLengthFilter::ASCIIString="mean")
+function rc{T<:Number}(lD::Matrix{T}; method::RCMethod=RCBootstrap(size(lD, 1)), numResample::Int=1000, blockLength::Number=-1, blockLengthFilter::Symbol=:mean)
 	update!(method.bootstrapParam, numResample=numResample, blockLength=blockLength)
 	method.blockLengthFilter = blockLengthFilter
-	return(realitycheck(lD, methodIn))
+	return(rc(lD, method))
 end
 #Keyword wrapper (calculates loss differential)
-realitycheck{T<:Number}(xPrediction::Matrix{T}, xBaseCase::Vector{T}, x::Vector{T}, lossFunc::LossFunction=SquaredError(); method::RCMethod=RCBootstrap(), numResample::Int=1000, blockLength::Number=-1, blockLengthFilter::ASCIIString="mean") = realitycheck(lossdiff(xPrediction, xBaseCase, xTrue, lossFunc), method=method, numResample=numResample, blockLength=blockLength, blockLengthFilter=blockLengthFilter)
-
-
+rc{T<:Number}(xPrediction::Matrix{T}, xBaseCase::Vector{T}, xTrue::Vector{T}; lossFunction::LossFunction=SquaredError(), method::RCMethod=RCBootstrap(length(x)), numResample::Int=1000, blockLength::Number=-1, blockLengthFilter::Symbol=:mean) = rc(lossdiff(xPrediction, xBaseCase, xTrue, lossFunction), method=method, numResample=numResample, blockLength=blockLength, blockLengthFilter=blockLengthFilter)
 
 
 
@@ -270,20 +292,32 @@ type SPABootstrap <: SPAMethod
 		new(bootstrapParam, blockLengthFilter, hacVarianceMethod)
 	end
 end
-SPABootstrap(numObs::Int) = SPABootstrap(BootstrapParam(numObs), :median, HACVarianceBasic(KernelPR1994SB(numObs, 0.99999), BandwidthMax()))
+function SPABootstrap(numObs::Int, hacVariant::Symbol=:none)
+	x = SPABootstrap(BootstrapParam(numObs), :mean, HACVarianceBasic(KernelPR1994SB(numObs, 0.1), BandwidthMax()))
+	update!(x, hacVariant=hacVariant, numObs=numObs)
+	return(x)
+end
 #type methods
 Base.string(x::SPABootstrap) = "spaBootstrap"
 function Base.show(io::IO, x::SPABootstrap)
 	println(io, "Test for Superior Predictive Ability via bootstrap. Bootstrap parameters are:")
 	show(io, x.bootstrapParam)
 	println(io, "Block length filter is:" * string(x.blockLengthFilter))
-	println(io, "Kernel function for hac variance estimation is: " * string(x.kernelFunction))
-	println(io, "Bandwidth method for hac variance estimation is: ")
-	show(io, x.bandwidthMethod)
+	println(io, "HAC variance method is:")
+	show(x.hacVarianceMethod)
 end
 Base.show(x::RCBootstrap) = show(STDOUT, x)
+function update!(x::SPABootstrap; hacVariant::Symbol=:none, numObs::Int=-999)
+	numObs == -999 && error("You must specify the number of observations in your dataset for this update! method")
+	if hacVariant == :basic; x.hacVarianceMethod = HACVarianceBasic(KernelPR1994SB(numObs, 0.1), BandwidthMax())
+	elseif hacVariant == :epanechnikov; x.hacVarianceMethod = HACVarianceBasic(KernelEpanechnikov(1.0), BandwidthP2003(numObs))
+	elseif hacVariant == :bartlett; x.hacVarianceMethod = HACVarianceBasic(KernelBartlett(1.0), BandwidthP2003(numObs))
+	elseif hacVariant != :none; error("hacVariant symbol not recognised")
+	end
+	return(x)
+end
 #-------- FUNCTION -------------
-#realitycheck for bootstrap method
+#rc for bootstrap method
 function spa{T<:Number}(lD::Matrix{T}, method::SPAMethod)
 	#Validate inputs
 	numObs = size(lD, 1)
@@ -299,10 +333,7 @@ function spa{T<:Number}(lD::Matrix{T}, method::SPAMethod)
 	#Get hac variance estimators
 	if typeof(method.hacVarianceMethod) == HACVarianceBasic
 		if typeof(method.hacVarianceMethod.kernelFunction) == KernelPR1994SB
-			if method.hacVarianceMethod.kernelFunction.p2 == 0.99999 #This is the default value and is replaced now unless user explicitly replaced it
-				method.hacVarianceMethod.kernelFunction.p2 = 1 / getblocklength(method.bootstrapParam) #Match block length parameter to bootstrap method block length parameter
-			end
-			method.hacVarianceMethod.kernelFunction.p1 != numObs && error("Invalid number of observations parameter in kernel function in HAC variance method")
+			method.hacVarianceMethod.kernelFunction.p2 = 1 / getblocklength(method.bootstrapParam) #If using Politis, Romano (1994) "The Stationary Bootstrap" HAC estimator, set geometric distribution parameter using the chosen block length
 		end
 	end
 	wSqVec = [ hacvariance(sub(lD, 1:numObs, k), method.hacVarianceMethod) for k = 1:numModel ]
@@ -327,6 +358,15 @@ function spa{T<:Number}(lD::Matrix{T}, method::SPAMethod)
 	pVal_c = (1 / numResample) * sum(tSPA_c .> tSPA)
 	return([pVal_u, pVal_l, pVal_c])
 end
+#Keyword wrapper
+function spa{T<:Number}(lD::Matrix{T}; method::SPAMethod=SPABootstrap(size(lD, 1)), numResample::Int=1000, blockLength::Number=-1, blockLengthFilter::Symbol=:mean, hacVariant::Symbol=:none)
+	update!(method.bootstrapParam, numResample=numResample, blockLength=blockLength)
+	method.blockLengthFilter = blockLengthFilter
+	update!(method, hacVariant=hacVariant, numObs=size(lD, 1))
+	return(rc(lD, methodIn))
+end
+#Keyword wrapper (calculates loss differential)
+spa{T<:Number}(xPrediction::Matrix{T}, xBaseCase::Vector{T}, xTrue::Vector{T}; lossFunction::LossFunction=SquaredError(), method::RCMethod=RCBootstrap(), numResample::Int=1000, blockLength::Number=-1, blockLengthFilter::ASCIIString="mean", hacVariant::Symbol=:none) = rc(lossdiff(xPrediction, xBaseCase, xTrue, lossFunction), method=method, numResample=numResample, blockLength=blockLength, blockLengthFilter=blockLengthFilter, hacVariant=hacVariant)
 
 
 
@@ -337,11 +377,11 @@ end
 
 #non-exported method for obtaining the appropriate block-length for a multivariate time-series
 function multivariate_blocklength!{T<:Number}(x::Matrix{T}, bp::BootstrapParam, blockLengthFilter::Symbol)
-	if multMethod == :first
+	if blockLengthFilter == :first
 		bL = dbootstrapblocklength(x[:, 1], bp.bootstrapParam)
 		blockLengthVec = [bL]
 	else
-		blockLengthVec = [ dbootstrapblocklength(x[:, n], bp.bootstrapParam) for n = 1:size(x, 2) ]
+		blockLengthVec = [ dbootstrapblocklength(x[:, n], bp) for n = 1:size(x, 2) ]
 		if blockLengthFilter == :mean;	bL = mean(blockLengthVec)
 		elseif blockLengthFilter == :median; bL = median(blockLengthVec)
 		elseif blockLengthFilter == :maximum; bL = maximum(blockLengthVec)
@@ -349,7 +389,7 @@ function multivariate_blocklength!{T<:Number}(x::Matrix{T}, bp::BootstrapParam, 
 		else; error("Invalid value for blockLengthFilter")
 		end
 	end
-	update!(bp.bootstrapMethod, bL)
+	update!(bp.bootstrapMethod, blockLength=bL)
 	return(bL, blockLengthVec)
 end
 
@@ -361,15 +401,15 @@ end
 
 
 #Function for getting p-values from one-sided or two-sided statistical tests. Input can be eiter sorted vector of iid draws from relevant distribution, or an explicit distribution
-function pval{T<:Number}(xVec::Vector{T}, xObs::T; twoSided::Bool=true)
+function pvalue{T<:Number}(xVec::Vector{T}, xObs::T; twoSided::Bool=true)
 	if twoSided
 		i = searchsortedlast(xVec, xObs)
 		NHalf = 0.5 * length(xVec)
 		if i <= NHalf
-			tailRegion = -1
+			tailRegion = 1
 			pv = i / NHalf
 		else
-			tailRegion = 1
+			tailRegion = -1
 			pv = 2 - (i / NHalf)
 		end
 	else
@@ -378,13 +418,13 @@ function pval{T<:Number}(xVec::Vector{T}, xObs::T; twoSided::Bool=true)
 	end
 	return(pv, tailRegion)
 end
-function pval{T<:Number}(d::Distribution, xObs::T; twoSided::Bool=true)
+function pvalue{T<:Number}(d::Distribution, xObs::T; twoSided::Bool=true)
 	if twoSided
 		if xObs < mean(d)
-			tailRegion = -1
+			tailRegion = 1
 			pv = 2*cdf(d, xObs)
 		else
-			tailRegion = 1
+			tailRegion = -1
 			pv = 2*cdf(d, -1 * xObs)
 		end
 	else
