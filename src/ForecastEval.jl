@@ -185,6 +185,7 @@ end
 RCBootstrapAlt(numObs::Int) = RCBootstrapAlt(BootstrapParam(numObs), :median)
 #type methods
 Base.string(x::RCBootstrap) = "rcBootstrap"
+Base.string(x::RCBootstrapAlt) = "rcBootstrapAlt"
 function Base.show(io::IO, x::RCBootstrap)
 	println(io, "Reality check via bootstrap. Bootstrap parameters are:")
 	show(io, x.bootstrapParam)
@@ -193,6 +194,7 @@ Base.show(x::RCBootstrap) = show(STDOUT, x)
 #-------- FUNCTION -------------
 #rc for bootstrap method
 function rc{T<:Number}(lD::Matrix{T}, method::RCBootstrap)
+	error("Function does not work")
 	#Validate inputs
 	numObs = size(lD, 1)
 	numModel = size(lD, 2)
@@ -213,8 +215,8 @@ function rc{T<:Number}(lD::Matrix{T}, method::RCBootstrap)
 	for k = 1:numModel
 		fBar = mean(sub(lD, 1:numObs, k))
 		vBar = max(vBarOld, rootNumObs * fBar)
-		rC_updateboot!(lD, inds, numObs, rootNumObs, k, fBar, fBoot, vBoot)
-		println(vBoot) #investigate QuickSort
+		rc_updateboot!(lD, inds, rootNumObs, k, fBar, fBoot, vBoot)
+		#println(vBoot) #investigate QuickSort
 		sort!(vBoot) #Consider specifying insertion sort (default is QuickSort) since vBar is likely to be close to sorted
 		M = searchsortedlast(vBoot, vBar)
 		pValVec[k] = 1 - (M / numObs)
@@ -223,16 +225,19 @@ function rc{T<:Number}(lD::Matrix{T}, method::RCBootstrap)
 	return(pValVec)
 end
 #Non-exported function used to update the \bar{V}_k and \bar{V}_{k,i}^* in White (2000) (see page 1110)
-function rC_updateboot!{T<:Number}(lD::Matrix{T}, inds::Matrix{Int}, numObs::Int, rootNumObs::Float64, modelNum::Int, fBar::Float64, fBoot::Vector{Float64}, vBoot::Vector{Float64})
-	lDSub = sub(lD, 1:numObs, modelNum)
+function rc_updateboot!{T<:Number}(lD::Matrix{T}, inds::Matrix{Int}, rootNumObs::Float64, modelNum::Int, fBar::Float64, fBoot::Vector{Float64}, vBoot::Vector{Float64})
+	lDSub = sub(lD, :, modelNum)
 	for i = 1:size(inds, 2)
-		fBoot[i] = mean(lDSub[sub(inds, 1:numObs, i)])
+		fBoot[i] = mean(lDSub[sub(inds, :, i)])
 		vBoot[i] = max(vBoot[i], rootNumObs * (fBoot[i] - fBar))
 	end
 	return(true)
 end
 #Alternative bootstrap methodology (duplicated my MatLab code)
-function rc{T<:Number}(lD::Matrix{T}, method::RCBootstrapAlt)
+#function rc{T<:Number}(lD::Matrix{T}, method::RCBootstrapAlt)
+function rc(lD::Matrix{Float64}, method::RCBootstrapAlt)
+	error("Function does not work")
+
 	numObs = size(lD, 1)
 	numModel = size(lD, 2)
 	rootNumObs = sqrt(numObs)
@@ -244,19 +249,22 @@ function rc{T<:Number}(lD::Matrix{T}, method::RCBootstrapAlt)
 	typeof(method.bootstrapParam.bootstrapMethod) == BootstrapTaperedBlock && error("rc currently not possible using tapered block bootstrap")
 	inds = dbootstrapindex(method.bootstrapParam)
 	mld = [ mean(sub(lD, 1:numObs, k)) for k = 1:numModel ]
+	v = maximum(rootNumObs * mld)
 
-	println(eltype(mld))
-	println(length(mld))
+	#println(typeof(lD))
+	#println(typeof(inds))
+	#mldBoot1 = [ mean(sub(lD, 1:size(lD, 1), k)[sub(inds, 1:size(inds, 1), j)]) for k = 1:size(lD, 2), j = 1:size(inds, 2) ]
+	#mldBoot1 = [ mean(sub(lD, 1:numObs, k)[sub(inds, 1:numObs, j)]) for k = 1:numModel, j = 1:numResample ]
+	#println(typeof(mldBoot1))
 
-	mldBoot = [ mean(lD[:, k][inds[:, i]]) for i = 1:numResample, k = 1:numModel ]
+	mldBoot = Array(Float64, numModel, numResample)
+	for j = 1:numResample
+		for k = 1:numModel
+			mldBoot[k, j] = mean(sub(lD, 1:numObs, k)[sub(inds, 1:numObs, j)])
+		end
+	end
 
-	println(eltype(mldBoot))
-	println(ndims(mldBoot))
-	println(size(mldBoot, 1))
-	println(size(mldBoot, 2))
-
-
-	vBoot = maximum(rootNumObs * (mldBoot .- mld), 2)
+	vBoot = maximum(rootNumObs * (mldBoot .- mld), 1)
 	pVal = sum(vBoot .> v) / numResample
 	return([pVal])
 end
@@ -317,39 +325,83 @@ function update!(x::SPABootstrap; hacVariant::Symbol=:none, numObs::Int=-999)
 	return(x)
 end
 #-------- FUNCTION -------------
-#rc for bootstrap method
+#spa for bootstrap method
 function spa{T<:Number}(lD::Matrix{T}, method::SPAMethod)
+	#Hansen's loss differentials have base case first
+	lD *= -1
 	#Validate inputs
 	numObs = size(lD, 1)
 	rootNumObs = sqrt(numObs)
 	numModel = size(lD, 2)
+	numResample = method.bootstrapParam.numResample
 	numObs < 3 && error("Not enough observations to perform a reality check")
 	numModel < 1 && error("Input data matrix is empty")
+	method.bootstrapParam.numObsData != numObs && error("numObsData field in BootstrapParam is not equal to number of rows in loss differential matrix")
+	typeof(method.bootstrapParam.bootstrapMethod) == BootstrapTaperedBlock && error("spa test currently not possible using tapered block bootstrap")
 	#Get block length and bootstrap indices
 	getblocklength(method.bootstrapParam) <= 0 && multivariate_blocklength!(lD, method.bootstrapParam, method.blockLengthFilter)
-	method.bootstraParam.numObsData != numObs && error("numObsData field in BootstrapParam is not equal to number of rows in loss differential matrix")
-	typeof(method.bootstrapParam.bootstrapMethod) == TaperedBlock && error("spa test currently not possible using tapered block bootstrap")
+
+	println("block length = " * string(getblocklength(method.bootstrapParam)))
+
 	inds = dbootstrapindex(method.bootstrapParam)
 	#Get hac variance estimators
 	if typeof(method.hacVarianceMethod) == HACVarianceBasic
 		if typeof(method.hacVarianceMethod.kernelFunction) == KernelPR1994SB
-			method.hacVarianceMethod.kernelFunction.p2 = 1 / getblocklength(method.bootstrapParam) #If using Politis, Romano (1994) "The Stationary Bootstrap" HAC estimator, set geometric distribution parameter using the chosen block length
+			method.hacVarianceMethod.kernelFunction.p = 1 / getblocklength(method.bootstrapParam) #If using Politis, Romano (1994) "The Stationary Bootstrap" HAC estimator, set geometric distribution parameter using the chosen block length
 		end
 	end
-	wSqVec = [ hacvariance(sub(lD, 1:numObs, k), method.hacVarianceMethod) for k = 1:numModel ]
-	wInv = [ 1 / sqrt(wSqVec) for k = 1:numModel ]
+	wSqVec = Array(Float64, numModel)
+	for k = 1:numModel
+		(wSqVec[k], _) = hacvariance(lD[:, k], method.hacVarianceMethod)
+	end
+
+	print("hac variances = "); showcompact(wSqVec); println("")
+
+	wInv = [ 1 / sqrt(wSqVec[k]) for k = 1:numModel ]
 	#Get different mean definitions
-	mu_u = mean(lD, 1)
+	mu_u = [ mean(sub(lD, 1:numObs, k)) for k = 1:numModel ]
 	mu_l = [ max(mu_u[k], 0) for k = 1:numModel ]
-	multTerm_mu_c = (2 * log(log(numObs))) * (1/numObs)
-	mu_c = [ (mu_u[k] >= sqrt(multTerm_mu_c * wSqVec[k])) * mu_u[k] for k = 1:numModel ]
+	multTerm_mu_c = (1/numObs) * 2 * log(log(numObs))
+	mu_c = [ (mu_u[k] >= -1 * sqrt(multTerm_mu_c * wSqVec[k])) * mu_u[k] for k = 1:numModel ]
+
+	print("mu_u = "); showcompact(mu_u); println("")
+	print("mu_l = "); showcompact(mu_l); println("")
+	print("mu_c = "); showcompact(mu_c); println("")
+
 	#Get bootstrapped mean loss differentials centred on different means, studentized, and scaled
-	mldBoot = [ mean(sub(lD, 1:numObs, k)[sub(inds, 1:numObs, i)]) for k = 1:numModel, i = 1:numResample ]
+
+	#mldBoot = [ mean(sub(lD, 1:numObs, k)[sub(inds, 1:numObs, i)]) for k = 1:numModel, i = 1:numResample ]
+	mldBoot = Array(Float64, numModel, numResample)
+	for j = 1:numResample
+		for k = 1:numModel
+			mldBoot[k, j] = mean(sub(lD, 1:numObs, k)[sub(inds, 1:numObs, j)])
+		end
+	end
+
+# 	temp1 = [ rootNumObs * mu_u[k] * wInv[k] for k = 1:numModel ]
+# 	temp2 = [ max(temp1[k], 0) for k = 1:numModel ]
+# 	tSPA = maximum(temp2)
+# 	print("temp1 = "); for n = 1:length(temp1); @printf("%4.3f,", temp1[n]); end; println("")
+# 	print("temp2 = "); for n = 1:length(temp2); @printf("%4.3f,", temp2[n]); end; println("")
+# 	println("tSPA = " * string(tSPA))
+
+
+	tSPA = maximum([ max(rootNumObs * mu_u[k] * wInv[k], 0) for k = 1:numModel ])
+
+
+
 	z_u_adj = rootNumObs * (wInv .* (mldBoot .- mu_u))
 	z_l_adj = rootNumObs * (wInv .* (mldBoot .- mu_l))
 	z_c_adj = rootNumObs * (wInv .* (mldBoot .- mu_c))
 	#Get p-values for each approach
-	tSPA = maximum(max((rootNumObs * mu_u) ./ sqrt(wVec), zeros(Float64, length(mu_u))))
+
+
+
+# 	temp_u = maximum(z_u_adj, 1)
+# 	print("temp_u = "); showcompact(temp_u); println("")
+# 	tSPA_u = [ max(0, temp_u[i]) for i = 1:numResample ]
+# 	print("tSPA_u = "); for n = 1:length(tSPA_u); @printf("%4.3f,", tSPA_u[n]); end; println("")
+
 	tSPA_u = [ max(0, maximum(sub(z_u_adj, 1:numModel, i))) for i = 1:numResample ]
 	tSPA_l = [ max(0, maximum(sub(z_l_adj, 1:numModel, i))) for i = 1:numResample ]
 	tSPA_c = [ max(0, maximum(sub(z_c_adj, 1:numModel, i))) for i = 1:numResample ]
@@ -363,10 +415,10 @@ function spa{T<:Number}(lD::Matrix{T}; method::SPAMethod=SPABootstrap(size(lD, 1
 	update!(method.bootstrapParam, numResample=numResample, blockLength=blockLength)
 	method.blockLengthFilter = blockLengthFilter
 	update!(method, hacVariant=hacVariant, numObs=size(lD, 1))
-	return(rc(lD, methodIn))
+	return(spa(lD, method))
 end
 #Keyword wrapper (calculates loss differential)
-spa{T<:Number}(xPrediction::Matrix{T}, xBaseCase::Vector{T}, xTrue::Vector{T}; lossFunction::LossFunction=SquaredError(), method::RCMethod=RCBootstrap(), numResample::Int=1000, blockLength::Number=-1, blockLengthFilter::ASCIIString="mean", hacVariant::Symbol=:none) = rc(lossdiff(xPrediction, xBaseCase, xTrue, lossFunction), method=method, numResample=numResample, blockLength=blockLength, blockLengthFilter=blockLengthFilter, hacVariant=hacVariant)
+spa{T<:Number}(xPrediction::Matrix{T}, xBaseCase::Vector{T}, xTrue::Vector{T}; lossFunction::LossFunction=SquaredError(), method::SPAMethod=SPABootstrap(size(lD, 1)), numResample::Int=1000, blockLength::Number=-1, blockLengthFilter::Symbol=:mean, hacVariant::Symbol=:none) = spa(lossdiff(xPrediction, xBaseCase, xTrue, lossFunction), method=method, numResample=numResample, blockLength=blockLength, blockLengthFilter=blockLengthFilter, hacVariant=hacVariant)
 
 
 
