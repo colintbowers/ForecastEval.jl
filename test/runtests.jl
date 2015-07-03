@@ -8,7 +8,7 @@ const numObs = 500::Int
 const numModel = 6::Int
 const dmMethodList = [DMAsymptoticBasic(numObs), DMAsymptoticHAC(numObs), DMBootstrap(numObs)]::Vector{DMMethod}
 const rcMethodList = [RCBootstrap(numObs), RCBootstrapAlt(numObs)]::Vector{RCMethod}
-const spaMethodList = [SPABootstrap(numObs), SPABootstrap(numObs, :epanechnikov)]::Vector{SPABootstrap}
+const spaMethodList = [SPABootstrap(numObs, muMethod=:all), SPABootstrap(numObs, muMethod=:auto), SPABootstrap(numObs, hacVariant=:epanechnikov, muMethod=:auto), SPABootstrap(numObs, blockLength=10, hacVariant=:epanechnikov, muMethod=:auto)]::Vector{SPABootstrap}
 
 function simlD(maOrder::Int, elD::Vector{Float64})
 	maOrder == 0 ? maCoef = Array(Float64, 0) : maCoef = [ 1 / 2^p for p = 1:maOrder ]
@@ -21,83 +21,36 @@ function simlD(maOrder::Int, elD::Vector{Float64})
 end
 
 
-
-
 function testspa(elD::Vector{Float64}=zeros(Float64, numModel))
 	numIter = 100
-	for maOrder = 0:0
-	#for maOrder = 0:3:6
-		for j = 1:1
+	#for maOrder = 0:0
+	for maOrder = 0:3:6
+		#for j = 1:1
+		for j = 1:length(spaMethodList)
 			spaM = spaMethodList[j]
-			println("Method = " * string(spaM))
+			println("Method = " * string(spaM) * "-" * string(spaM.muMethod) * "-" * string(spaM.hacVarianceMethod.kernelFunction))
 			println("True MA order = " * string(maOrder))
 			println("True Expected LD = " * string(elD))
-			pValMat = Array(Float64, 3, numIter)
+			pValArr = Array(Vector{Float64}, numIter)
 			for n = 1:numIter
 				(lD, ranking) = simlD(maOrder, elD)
-				pValMat[:, n] = spa(lD, method=spaM)
+				spaMIn = deepcopy(spaM)
+				pValArr[n] = spa(lD, method=spaMIn)
 			end
-			println("spa_u rej freq = " * string((1/numIter) * sum(vec(pValMat[1, :]) .< 0.05)))
-			println("spa_l rej freq = " * string((1/numIter) * sum(vec(pValMat[2, :]) .< 0.05)))
-			println("spa_c rej freq = " * string((1/numIter) * sum(vec(pValMat[3, :]) .< 0.05)))
+			numMethod = length(pValArr[1])
+			for q = 1:numMethod
+				pValVec = Float64[ pValArr[n][q] for n = 1:numIter ]
+				println("spa rej freq method " * string(q) * " = " * string((1/numIter) * sum(pValVec .< 0.05)))
+			end
 			println("")
 		end
 	end
 	return(true)
 end
 
-
-
-#H0: The basecase is not worse than any of the models
-#H0: The basecase is at least as good, if not better, than all of the models
-#HA: At least one model is better than the basecase
-#H0: No model better than base-case
-
-#SPA test in current form will not work when all models are significantly worse than the base case. At least one model must be as good or better. Not sure why this isn't mentioned in the paper
 
 testspa()
-testspa(0.5 * ones(Float64, numModel)) #H0 is true (rej freq -> 0.0)
-testspa(-0.5 * ones(Float64, numModel)) #HA is true (rej freq -> 1.0)
-
-testspa(0.1 * ones(Float64, numModel)) #base-case better
-testspa(-0.1 * ones(Float64, numModel)) #models better
-
-testspa([0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05])
-testspa(-0.05 * ones(Float64, numModel))
-
-testspa(0.11 * ones(Float64, numModel))
-testspa([0.01, 0.5 * ones(Float64, numModel-1)])
-
-
-showcompact(randn())
-
-function testspaOld(baseCaseMult::Float64=1.0)
-	for maOrder = 6:6
-	#for maOrder = 0:3:6
-		(xTrue, vbc, bc, vModel, x, ranking) = simmodel(maOrder, 0.1, 0.25, baseCaseMult)
-		x = [ x[m][n] for n = 1:numObs, m = 1:numModel ]
-		#for j = 1:length(spaMethodList)
-		for j = 1:1
-			spaM = spaMethodList[j]
-			pValVec = spa(x, bc, xTrue, method=spaM)
-			println("Method = " * string(spaM))
-			println("True MA order = " * string(maOrder))
-			println("True ranking = " * string(ranking))
-			println("Base-case error variance = " * string(vbc))
-			println("Model error variances = " * string(vModel))
-			println("spa pval_u = " * string(pValVec[1]))
-			println("spa pval_l = " * string(pValVec[2]))
-			println("spa pval_c = " * string(pValVec[3]))
-			println("")
-			println("")
-		end
-	end
-	return(true)
-end
-
-
-
-
+testspa([-0.1, 0.1 * ones(Float64, 5)])
 
 
 function testrc()
@@ -120,6 +73,12 @@ function testrc()
 	end
 	return(true)
 end
+
+
+
+
+
+
 
 
 
