@@ -21,6 +21,38 @@ function simlD(maOrder::Int, elD::Vector{Float64})
 end
 
 
+
+function testrc(elD::Vector{Float64}=zeros(Float64, numModel))
+	numIter = 100
+	#for maOrder = 0:0
+	for maOrder = 0:3:6
+		for j = 2:2
+		#for j = 1:length(rcMethodList)
+			rcM = rcMethodList[j]
+			println("Method = " * string(rcM))
+			println("True MA order = " * string(maOrder))
+			println("True Expected LD = " * string(elD))
+			pValArr = Array(Float64, numIter)
+			for n = 1:numIter
+				(lD, ranking) = simlD(maOrder, elD)
+				rcMIn = deepcopy(rcM)
+				pValArr[n] = rc(lD, method=rcMIn)
+			end
+			println("rc rej freq = " * string((1/numIter) * sum(pValArr .< 0.05)))
+			println("")
+		end
+	end
+	return(true)
+end
+
+
+
+
+
+
+
+
+
 function testspa(elD::Vector{Float64}=zeros(Float64, numModel))
 	numIter = 100
 	#for maOrder = 0:0
@@ -48,57 +80,6 @@ function testspa(elD::Vector{Float64}=zeros(Float64, numModel))
 	return(true)
 end
 
-
-testspa()
-testspa([-0.1, 0.1 * ones(Float64, 5)])
-
-
-function testrc()
-#	for maOrder = 0:3:6
-	for maOrder = 6:6
-		(xTrue, vbc, bc, vModel, x, ranking) = simmodel(maOrder)
-		x = col2mat(x)
-		for j = 1:length(rcMethodList)
-			rcM = rcMethodList[j]
-			pValVec = rc(x, bc, xTrue, method=rcM)
-			println("Method = " * string(rcM))
-			println("True MA order = " * string(maOrder))
-			println("True ranking = " * string(ranking))
-			println("Base-case error variance = " * string(vbc))
-			println("Model error variances = " * string(vModel))
-			println("rc p-values = " * string(pValVec))
-			println("")
-			println("")
-		end
-	end
-	return(true)
-end
-
-
-
-
-
-
-
-
-
-
-
-
-function simmodel(maOrder::Int, eVarMin::Float64=0.1, eVarMax::Float64=0.25, baseCaseMult::Float64=1.0)
-	maOrder == 0 ? maCoef = Array(Float64, 0) : maCoef = [ 1 / 2^p for p = 1:maOrder ]
-	xTrue = simulate(numObs, ARIMAModel(maCoef=maCoef))
-	vbc = eVarMin + (eVarMax - eVarMin) * rand()
-	vbc = baseCaseMult * vbc
-	vModel = eVarMin + (eVarMax - eVarMin) * rand(numModel)
-	bc = xTrue + vbc * randn(numObs)
-	x = [ xTrue + vModel[n] * randn(numObs) for n = 1:numModel ]
-	ranking = sortperm([vModel, vbc])
-	ranking[ranking .== numModel+1] = 0
-	return(xTrue, vbc, bc, vModel, x, ranking)
-end
-col2mat{T}(x::Vector{Vector{T}}) = [ x[m][n] for n = 1:length(x[1]), m = 1:length(x) ]
-mat2col{T}(x::Matrix{T}) = [ x[:, m] for m = 1:size(x, 2) ]
 
 
 
@@ -133,6 +114,34 @@ function testdm(elD::Float64=0.0)
 	end
 	return(true)
 end
+
+
+
+
+
+
+
+
+
+
+
+
+function simmodel(maOrder::Int, eVarMin::Float64=0.1, eVarMax::Float64=0.25, baseCaseMult::Float64=1.0)
+	maOrder == 0 ? maCoef = Array(Float64, 0) : maCoef = [ 1 / 2^p for p = 1:maOrder ]
+	xTrue = simulate(numObs, ARIMAModel(maCoef=maCoef))
+	vbc = eVarMin + (eVarMax - eVarMin) * rand()
+	vbc = baseCaseMult * vbc
+	vModel = eVarMin + (eVarMax - eVarMin) * rand(numModel)
+	bc = xTrue + vbc * randn(numObs)
+	x = [ xTrue + vModel[n] * randn(numObs) for n = 1:numModel ]
+	ranking = sortperm([vModel, vbc])
+	ranking[ranking .== numModel+1] = 0
+	return(xTrue, vbc, bc, vModel, x, ranking)
+end
+col2mat{T}(x::Vector{Vector{T}}) = [ x[m][n] for n = 1:length(x[1]), m = 1:length(x) ]
+mat2col{T}(x::Matrix{T}) = [ x[:, m] for m = 1:size(x, 2) ]
+
+
 
 
 

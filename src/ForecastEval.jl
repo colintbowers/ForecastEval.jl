@@ -20,7 +20,10 @@ import 	Base.string,
 		DependentBootstrap.update!
 
 #Specify the variables/functions to export (use export FunctionName1, FunctionName2, etc)
-export 	dm,
+export 	ForecastEvalMethod,
+		ForecastEvalMethodNoBaseCase,
+		ForecastEvalMethodWithBaseCase,
+		dm,
 		DMMethod,
 		DMAsymptoticBasic,
 		DMAsymptoticHAC,
@@ -28,7 +31,6 @@ export 	dm,
 		rc,
 		RCMethod,
 		RCBootstrap,
-		RCBootstrapAlt,
 		spa,
 		SPAMethod,
 		SPABootstrap
@@ -42,6 +44,12 @@ export 	dm,
 #----------------------------------------------------------
 #Currently none
 
+#Set overall abstract type
+abstract ForecastEvalMethod
+abstract ForecastEvalMethodWithBaseCase <: ForecastEvalMethod
+abstract ForecastEvalMethodNoBaseCase <: ForecastEvalMethod
+
+
 
 #----------------------------------------------------------
 #ROUTINE
@@ -54,7 +62,7 @@ export 	dm,
 #	You can skip the block length selection procedure by specifying a block-length > 0
 #----------------------------------------------------------
 #-------- METHOD TYPES ---------
-abstract DMMethod
+abstract DMMethod <: ForecastEvalMethodNoBaseCase
 #Asymptotic approximation with basic HAC estimator
 type DMAsymptoticBasic <: DMMethod
 	lagWindow::Int
@@ -156,7 +164,27 @@ function dm{T1<:Number}(lossDiff::Vector{T1}; method::DMMethod=DMBootstrap(lengt
 	return(dm(lossDiff, method, confLevel=confLevel))
 end
 #Wrapper for calculating loss differential
-dm{T1<:Number}(xhat1::Vector{T1}, xhat2::Vector{T1}, x::Vector{T1}, ; lossFunction::LossFunction=SquaredError(), method::DMMethod=DMBootstrap(length(x)), numResample::Int=-999, blockLength::Number=-999, lagWindow::Int=-999, confLevel::Number=0.05) = dm(lossdiff(xhat1, xhat2, x, lossFunction), method=method, numResample=numResample, blockLength=blockLength, lagWindow=lagWindow, confLevel=confLevel)
+dm{T1<:Number}(xhat1::Vector{T1}, xhat2::Vector{T1}, x::Vector{T1}; lossFunction::LossFunction=SquaredLoss(), method::DMMethod=DMBootstrap(length(x)), numResample::Int=-999, blockLength::Number=-999, lagWindow::Int=-999, confLevel::Number=0.05) = dm(lossdiff(xhat1, xhat2, x, lossFunction), method=method, numResample=numResample, blockLength=blockLength, lagWindow=lagWindow, confLevel=confLevel)
+#Method for multiple forecasts against one base-case
+function dm{T1<:Number}(lossDiff::Matrix{T1}, method::DMMethod ; confLevel::Number=0.05)
+	size(lossDiff, 2) < 1 && error("Not enough input series to perform test")
+	pValVec = Array(Float64, size(lossDiff, 2))
+	tailRegionVec = Array(Int, size(lossDiff, 2))
+	for k = 1:size(lossDiff, 2)
+		(pValVec[k], tailRegionVec[k]) = dm(lossDiff[:, k], method, confLevel=confLevel)
+	end
+	ranking = sortperm(vec(mean(lossDiff, 1)), rev=true)
+	return(pValVec, tailRegionVec, ranking)
+end
+#Keyword wrappers for multiple forecasts
+function dm{T1<:Number}(lossDiff::Matrix{T1}; method::DMMethod=DMBootstrap(length(lossDiff)), numResample::Int=-999, blockLength::Number=-999, lagWindow::Int=-999, confLevel::Number=0.05)
+	typeof(method) == DMBootstrap && update!(method.bootstrapParam, numResample=numResample, blockLength=blockLength)
+	typeof(method) == DMAsymptoticBasic && update!(method, lagWindow=lagWindow)
+	return(dm(lossDiff, method, confLevel=confLevel))
+end
+#Wrapper for calculating loss differential when there are multiple forecasts
+dm{T1<:Number}(xPrediction::Matrix{T1}, xBaseCase::Vector{T1}, xTrue::Vector{T1}; lossFunction::LossFunction=SquaredLoss(), method::DMMethod=DMBootstrap(length(x)), numResample::Int=-999, blockLength::Number=-999, lagWindow::Int=-999, confLevel::Number=0.05) = dm(lossdiff(xPrediction, xBaseCase, xTrue, lossFunction), method=method, numResample=numResample, blockLength=blockLength, lagWindow=lagWindow, confLevel=confLevel)
+
 
 
 
@@ -173,17 +201,8 @@ dm{T1<:Number}(xhat1::Vector{T1}, xhat2::Vector{T1}, x::Vector{T1}, ; lossFuncti
 #	You can skip the block length selection procedure by specifying a block-length > 0
 #----------------------------------------------------------
 #-------- METHOD TYPES ---------
-abstract RCMethod
+abstract RCMethod <: ForecastEvalMethodWithBaseCase
 type RCBootstrap <: RCMethod
-	bootstrapParam::BootstrapParam
-	blockLengthFilter::Symbol
-	function RCBootstrap(bootstrapParam::BootstrapParam, blockLengthFilter::Symbol)
-		!(blockLengthFilter == :mean || blockLengthFilter == :median || blockLengthFilter == :maximum || blockLengthFilter == :first) && error("Invalid value for blockLengthFilter")
-		new(bootstrapParam, blockLengthFilter)
-	end
-end
-RCBootstrap(numObs::Int) = RCBootstrap(BootstrapParam(numObs), :median)
-type RCBootstrapAlt <: RCMethod
 	bootstrapParam::BootstrapParam
 	blockLengthFilter::Symbol
 	function RCBootstrapAlt(bootstrapParam::BootstrapParam, blockLengthFilter::Symbol)
@@ -191,10 +210,9 @@ type RCBootstrapAlt <: RCMethod
 		new(bootstrapParam, blockLengthFilter)
 	end
 end
-RCBootstrapAlt(numObs::Int) = RCBootstrapAlt(BootstrapParam(numObs), :median)
+RCBootstrap(numObs::Int) = RCBootstrapAlt(BootstrapParam(numObs), :median)
 #type methods
 Base.string(x::RCBootstrap) = "rcBootstrap"
-Base.string(x::RCBootstrapAlt) = "rcBootstrapAlt"
 function deepcopy(x::RCMethod)
 	tempArgs = [ deepcopy(getfield(x, i)) for i = 1:length(names(x)) ]
 	return(eval(parse(string(typeof(x)) * "(tempArgs...)")))
@@ -202,92 +220,57 @@ end
 function Base.show(io::IO, x::RCBootstrap)
 	println(io, "Reality check via bootstrap. Bootstrap parameters are:")
 	show(io, x.bootstrapParam)
+	println("    Block length filter = " * string(x.blockLengthFilter))
 end
 Base.show(x::RCBootstrap) = show(STDOUT, x)
+function update!(x::RCBootstrap; blockLengthFilter::Symbol=:none)
+	if blockLengthFilter != :none
+		(blockLengthFilter == :mean || blockLengthFilter == :median || blockLengthFilter == :maximum || blockLengthFilter == :first) ? (x.blockLengthFilter = blockLengthFilter) : error("Invalid symbol for blockLengthFilter field")
+	end
+	return(x)
+end
 #-------- FUNCTION -------------
-#rc for bootstrap method
+#rc for bootstrap method (note, this follows Hansen (2005) method, so only one p-value is output at the end)
 function rc{T<:Number}(lD::Matrix{T}, method::RCBootstrap)
-	error("Function does not work")
+	#White's loss differentials have base case first
+	lD *= -1
 	#Validate inputs
 	numObs = size(lD, 1)
-	numModel = size(lD, 2)
 	rootNumObs = sqrt(numObs)
-	numObs < 3 && error("Not enough observations to perform a reality check")
-	numModel < 1 && error("Input data matrix is empty")
-	#Get block-length and bootstrap indices
-	getblocklength(method.bootstrapParam) <= 0 && multivariate_blocklength!(lD, method.bootstrapParam, method.blockLengthFilter)
-	method.bootstrapParam.numObsData != numObs && error("numObsData field in BootstrapParam is not equal to number of rows in loss differential matrix")
-	typeof(method.bootstrapParam.bootstrapMethod) == BootstrapTaperedBlock && error("rc currently not possible using tapered block bootstrap")
-	inds = dbootstrapindex(method.bootstrapParam)
-	#Perform reality check
-	fBoot = Array(Float64, size(inds, 2))
-	vBoot = Array(Float64, size(inds, 2))
-	vBoot *= -Inf #All -Inf values will get updated on first iteration
-	pValVec = Array(Float64, numModel)
-	vBarOld = -Inf #-Inf gets updated on first iteration
-	for k = 1:numModel
-		fBar = mean(sub(lD, 1:numObs, k))
-		vBar = max(vBarOld, rootNumObs * fBar)
-		rc_updateboot!(lD, inds, rootNumObs, k, fBar, fBoot, vBoot)
-		#println(vBoot) #investigate QuickSort
-		sort!(vBoot) #Consider specifying insertion sort (default is QuickSort) since vBar is likely to be close to sorted
-		M = searchsortedlast(vBoot, vBar)
-		pValVec[k] = 1 - (M / numObs)
-		vBarOld = vBar
-	end
-	return(pValVec)
-end
-#Non-exported function used to update the \bar{V}_k and \bar{V}_{k,i}^* in White (2000) (see page 1110)
-function rc_updateboot!{T<:Number}(lD::Matrix{T}, inds::Matrix{Int}, rootNumObs::Float64, modelNum::Int, fBar::Float64, fBoot::Vector{Float64}, vBoot::Vector{Float64})
-	lDSub = sub(lD, :, modelNum)
-	for i = 1:size(inds, 2)
-		fBoot[i] = mean(lDSub[sub(inds, :, i)])
-		vBoot[i] = max(vBoot[i], rootNumObs * (fBoot[i] - fBar))
-	end
-	return(true)
-end
-#Alternative bootstrap methodology (duplicated my MatLab code)
-function rc{T<:Number}(lD::Matrix{T}, method::RCBootstrapAlt)
-	error("Function does not work")
-
-	numObs = size(lD, 1)
 	numModel = size(lD, 2)
-	rootNumObs = sqrt(numObs)
 	numResample = method.bootstrapParam.numResample
 	numObs < 3 && error("Not enough observations to perform a reality check")
 	numModel < 1 && error("Input data matrix is empty")
-	getblocklength(method.bootstrapParam) <= 0 && multivariate_blocklength!(lD, method.bootstrapParam, method.blockLengthFilter)
 	method.bootstrapParam.numObsData != numObs && error("numObsData field in BootstrapParam is not equal to number of rows in loss differential matrix")
-	typeof(method.bootstrapParam.bootstrapMethod) == BootstrapTaperedBlock && error("rc currently not possible using tapered block bootstrap")
+	typeof(method.bootstrapParam.bootstrapMethod) == BootstrapTaperedBlock && error("reality check currently not possible using tapered block bootstrap")
+	#Get block length and bootstrap indices
+	getblocklength(method.bootstrapParam) <= 0 && multivariate_blocklength!(lD, method.bootstrapParam, method.blockLengthFilter)
 	inds = dbootstrapindex(method.bootstrapParam)
-	mld = [ mean(sub(lD, 1:numObs, k)) for k = 1:numModel ]
-	v = maximum(rootNumObs * mld)
-
-	#println(typeof(lD))
-	#println(typeof(inds))
-	#mldBoot1 = [ mean(sub(lD, 1:size(lD, 1), k)[sub(inds, 1:size(inds, 1), j)]) for k = 1:size(lD, 2), j = 1:size(inds, 2) ]
-	#mldBoot1 = [ mean(sub(lD, 1:numObs, k)[sub(inds, 1:numObs, j)]) for k = 1:numModel, j = 1:numResample ]
-	#println(typeof(mldBoot1))
-
+	#Get mean loss differentials and bootstrapped mean loss differentials
+	mld = Float64[ mean(sub(lD, 1:numObs, k)) for k = 1:numModel ]
 	mldBoot = Array(Float64, numModel, numResample)
 	for j = 1:numResample
 		for k = 1:numModel
 			mldBoot[k, j] = mean(sub(lD, 1:numObs, k)[sub(inds, 1:numObs, j)])
 		end
 	end
-
+	#Get RC test statistic and bootstrapped density under the null
+	v = maximum(rootNumObs * mld)
 	vBoot = maximum(rootNumObs * (mldBoot .- mld), 1)
+	#Calculate p-value and return (as vector)
 	pVal = sum(vBoot .> v) / numResample
-	return([pVal])
+	return(pVal)
 end
 #Keyword wrapper
-function rc{T<:Number}(lD::Matrix{T}; method::RCMethod=RCBootstrap(size(lD, 1)), numResample::Int=-999, blockLength::Number=-999, blockLengthFilter::Symbol=:mean)
+function rc{T<:Number}(lD::Matrix{T}; method::RCMethod=RCBootstrap(size(lD, 1)), numResample::Int=-999, blockLength::Number=-999, blockLengthFilter::Symbol=:none)
 	update!(method.bootstrapParam, numResample=numResample, blockLength=blockLength)
-	method.blockLengthFilter = blockLengthFilter
+	update!(method, blockLengthFilter=blockLengthFilter)
 	return(rc(lD, method))
 end
 #Keyword wrapper (calculates loss differential)
-rc{T<:Number}(xPrediction::Matrix{T}, xBaseCase::Vector{T}, xTrue::Vector{T}; lossFunction::LossFunction=SquaredError(), method::RCMethod=RCBootstrap(length(x)), numResample::Int=-999, blockLength::Number=-999, blockLengthFilter::Symbol=:mean) = rc(lossdiff(xPrediction, xBaseCase, xTrue, lossFunction), method=method, numResample=numResample, blockLength=blockLength, blockLengthFilter=blockLengthFilter)
+rc{T<:Number}(xPrediction::Matrix{T}, xBaseCase::Vector{T}, xTrue::Vector{T}; lossFunction::LossFunction=SquaredLoss(), method::RCMethod=RCBootstrap(length(x)), numResample::Int=-999, blockLength::Number=-999, blockLengthFilter::Symbol=:none) = rc(lossdiff(xPrediction, xBaseCase, xTrue, lossFunction), method=method, numResample=numResample, blockLength=blockLength, blockLengthFilter=blockLengthFilter)
+
+
 
 
 
@@ -302,7 +285,7 @@ rc{T<:Number}(xPrediction::Matrix{T}, xBaseCase::Vector{T}, xTrue::Vector{T}; lo
 #	You can skip the block length selection procedure by specifying a block-length > 0
 #----------------------------------------------------------
 #-------- METHOD TYPES ---------
-abstract SPAMethod
+abstract SPAMethod <: ForecastEvalMethodWithBaseCase
 type SPABootstrap <: SPAMethod
 	bootstrapParam::BootstrapParam
 	blockLengthFilter::Symbol
@@ -358,7 +341,7 @@ function spa{T<:Number}(lD::Matrix{T}, method::SPAMethod)
 	rootNumObs = sqrt(numObs)
 	numModel = size(lD, 2)
 	numResample = method.bootstrapParam.numResample
-	numObs < 3 && error("Not enough observations to perform a reality check")
+	numObs < 3 && error("Not enough observations to perform an SPA test")
 	numModel < 1 && error("Input data matrix is empty")
 	method.bootstrapParam.numObsData != numObs && error("numObsData field in BootstrapParam is not equal to number of rows in loss differential matrix")
 	typeof(method.bootstrapParam.bootstrapMethod) == BootstrapTaperedBlock && error("spa test currently not possible using tapered block bootstrap")
@@ -421,7 +404,8 @@ function spa{T<:Number}(lD::Matrix{T}; method::SPAMethod=SPABootstrap(size(lD, 1
 	return(spa(lD, method))
 end
 #Keyword wrapper (calculates loss differential)
-spa{T<:Number}(xPrediction::Matrix{T}, xBaseCase::Vector{T}, xTrue::Vector{T}; lossFunction::LossFunction=SquaredError(), method::SPAMethod=SPABootstrap(size(lD, 1)), numResample::Int=-999, blockLength::Number=-999, blockLengthFilter::Symbol=:none, hacVariant::Symbol=:none, muMethod::Symbol=:none) = spa(lossdiff(xPrediction, xBaseCase, xTrue, lossFunction), method=method, numResample=numResample, blockLength=blockLength, blockLengthFilter=blockLengthFilter, hacVariant=hacVariant, muMethod=muMethod)
+spa{T<:Number}(xPrediction::Matrix{T}, xBaseCase::Vector{T}, xTrue::Vector{T}; lossFunction::LossFunction=SquaredLoss(), method::SPAMethod=SPABootstrap(size(lD, 1)), numResample::Int=-999, blockLength::Number=-999, blockLengthFilter::Symbol=:none, hacVariant::Symbol=:none, muMethod::Symbol=:none) = spa(lossdiff(xPrediction, xBaseCase, xTrue, lossFunction), method=method, numResample=numResample, blockLength=blockLength, blockLengthFilter=blockLengthFilter, hacVariant=hacVariant, muMethod=muMethod)
+
 
 
 
@@ -493,6 +477,63 @@ end
 
 
 end # module
+
+
+
+
+#-------- IMPLEMENTATION OF REALITY CHECK FOLLOWING METHOD IN SECTION 3 OF WHITE'S PAPER (CURRENTLY BROKEN)
+# Base.string(x::RCBootstrapLong) = "rcBootstrapLong"
+# type RCBootstrapLong <: RCMethod
+# 	bootstrapParam::BootstrapParam
+# 	blockLengthFilter::Symbol
+# 	function RCBootstrapLong(bootstrapParam::BootstrapParam, blockLengthFilter::Symbol)
+# 		!(blockLengthFilter == :mean || blockLengthFilter == :median || blockLengthFilter == :maximum || blockLengthFilter == :first) && error("Invalid value for blockLengthFilter")
+# 		new(bootstrapParam, blockLengthFilter)
+# 	end
+# end
+# RCBootstrapLong(numObs::Int) = RCBootstrapLong(BootstrapParam(numObs), :median)
+# function rc{T<:Number}(lD::Matrix{T}, method::RCBootstrap)
+# 	#White's loss differentials have base case first
+# 	lD *= -1
+# 	#Validate inputs
+# 	numObs = size(lD, 1)
+# 	numModel = size(lD, 2)
+# 	rootNumObs = sqrt(numObs)
+# 	numResample = method.bootstrapParam.numResample
+# 	numObs < 3 && error("Not enough observations to perform a reality check")
+# 	numModel < 1 && error("Input data matrix is empty")
+# 	#Get block-length and bootstrap indices
+# 	getblocklength(method.bootstrapParam) <= 0 && multivariate_blocklength!(lD, method.bootstrapParam, method.blockLengthFilter)
+# 	method.bootstrapParam.numObsData != numObs && error("numObsData field in BootstrapParam is not equal to number of rows in loss differential matrix")
+# 	typeof(method.bootstrapParam.bootstrapMethod) == BootstrapTaperedBlock && error("rc currently not possible using tapered block bootstrap")
+# 	inds = dbootstrapindex(method.bootstrapParam)
+# 	#Perform reality check
+# 	fBoot = Array(Float64, size(inds, 2))
+# 	vBoot = Array(Float64, size(inds, 2))
+# 	vBoot *= -Inf #All -Inf values will get updated on first iteration
+# 	pValVec = Array(Float64, numModel)
+# 	vBarOld = -Inf #-Inf gets updated on first iteration
+# 	for k = 1:numModel
+# 		fBar = mean(sub(lD, 1:numObs, k))
+# 		vBar = max(vBarOld, rootNumObs * fBar)
+# 		rc_updateboot!(lD, inds, rootNumObs, k, fBar, fBoot, vBoot)
+# 		#println(vBoot) #investigate QuickSort
+# 		sort!(vBoot) #Consider specifying insertion sort (default is QuickSort) since vBar is likely to be close to sorted
+# 		M = searchsortedlast(vBoot, vBar)
+# 		pValVec[k] = 1 - (M / numObs)
+# 		vBarOld = vBar
+# 	end
+# 	return(pValVec)
+# end
+# #Non-exported function used to update the \bar{V}_k and \bar{V}_{k,i}^* in White (2000) (see page 1110)
+# function rc_updateboot!{T<:Number}(lD::Matrix{T}, inds::Matrix{Int}, rootNumObs::Float64, modelNum::Int, fBar::Float64, fBoot::Vector{Float64}, vBoot::Vector{Float64})
+# 	lDSub = sub(lD, :, modelNum)
+# 	for i = 1:size(inds, 2)
+# 		fBoot[i] = mean(lDSub[sub(inds, :, i)])
+# 		vBoot[i] = max(vBoot[i], rootNumObs * (fBoot[i] - fBar))
+# 	end
+# 	return(true)
+# end
 
 
 
