@@ -149,7 +149,7 @@ function dm{T<:Number}(lossDiff::Vector{T}, method::DMBootstrap; confLevel::Numb
 	!(0.0 < confLevel < 1.0) && error("Confidence level must lie between 0 and 1")
 	length(lossDiff) < 2 && error("Loss differential series must contain at least two observations")
 	getblocklength(method.bootstrapParam) <= 0 && dbootstrapblocklength!(method.bootstrapParam, lossDiff) #detect block-length if necessary
-	method.bootstrapParam.statistic != mean && error("statistic field in BootstrapParam must be set to mean")
+	update!(method.bootstrapParam, numObsData=length(lossDiff), numObsResample=length(lossDiff), statistic=mean) #Ensure correct fixed values in BootstrapParam
 	testStat = mean(lossDiff)
 	statVec = dbootstrapstatistic(lossDiff, method.bootstrapParam) - testStat #Centre statVec on zero
 	sort!(statVec)
@@ -173,8 +173,7 @@ function dm{T1<:Number}(lossDiff::Matrix{T1}, method::DMMethod ; confLevel::Numb
 	for k = 1:size(lossDiff, 2)
 		(pValVec[k], tailRegionVec[k]) = dm(lossDiff[:, k], method, confLevel=confLevel)
 	end
-	ranking = sortperm(vec(mean(lossDiff, 1)), rev=true)
-	return(pValVec, tailRegionVec, ranking)
+	return(pValVec, tailRegionVec, mean(lossDiff, 1))
 end
 #Keyword wrappers for multiple forecasts
 function dm{T1<:Number}(lossDiff::Matrix{T1}; method::DMMethod=DMBootstrap(length(lossDiff)), numResample::Int=-999, blockLength::Number=-999, lagWindow::Int=-999, confLevel::Number=0.05)
@@ -534,6 +533,8 @@ end # module
 # 	end
 # 	return(true)
 # end
+
+
 
 
 
