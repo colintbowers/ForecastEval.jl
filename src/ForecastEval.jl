@@ -130,7 +130,7 @@ function dm{T<:Number}(lossDiff::Vector{T}, method::DMAsymptoticBasic; confLevel
 	testStat = m / sqrt(v / length(lossDiff))
 	(pVal, tailRegion) = pvalue(Normal(), testStat, twoSided=true)
 	pVal > confLevel && (tailRegion = 0)
-	return(pVal, tailRegion)
+	return(pVal, tailRegion, m)
 end
 #Diebold-Mariano test using asymptotic approximation and custom HAC estimator (see section 1.1 of their paper)
 function dm{T<:Number}(lossDiff::Vector{T}, method::DMAsymptoticHAC; confLevel::Number=0.05)
@@ -142,20 +142,26 @@ function dm{T<:Number}(lossDiff::Vector{T}, method::DMAsymptoticHAC; confLevel::
 	testStat = m / sqrt(v / length(lossDiff))
 	(pVal, tailRegion) = pvalue(Normal(), testStat, twoSided=true)
 	pVal > confLevel && (tailRegion = 0)
-	return(pVal, tailRegion)
+	return(pVal, tailRegion, m)
 end
-#Diebold-Mariano test using a dependent bootstrap
-function dm{T<:Number}(lossDiff::Vector{T}, method::DMBootstrap; confLevel::Number=0.05)
+#Diebold-Mariano test using a dependent bootstrap (the forceLocationEstimator keyword arg forces the routine to use the statistic function in the input BootstrapParam, EVEN IF IT IS NOT mean)
+function dm{T<:Number}(lossDiff::Vector{T}, method::DMBootstrap; confLevel::Number=0.05, forceLocationEstimator::Bool=false)
 	!(0.0 < confLevel < 1.0) && error("Confidence level must lie between 0 and 1")
 	length(lossDiff) < 2 && error("Loss differential series must contain at least two observations")
 	getblocklength(method.bootstrapParam) <= 0 && dbootstrapblocklength!(method.bootstrapParam, lossDiff) #detect block-length if necessary
-	update!(method.bootstrapParam, numObsData=length(lossDiff), numObsResample=length(lossDiff), statistic=mean) #Ensure correct fixed values in BootstrapParam
-	testStat = mean(lossDiff)
-	statVec = dbootstrapstatistic(lossDiff, method.bootstrapParam) - testStat #Centre statVec on zero
+	if forceLocationEstimator == true
+		update!(method.bootstrapParam, numObsData=length(lossDiff), numObsResample=length(lossDiff)) #Ensure correct fixed values in BootstrapParam
+		testStat = method.bootstrapParam.statistic(lossDiff)
+	else
+		update!(method.bootstrapParam, numObsData=length(lossDiff), numObsResample=length(lossDiff), statistic=mean) #Ensure correct fixed values in BootstrapParam
+		testStat = mean(lossDiff)
+	end
+	statVec = dbootstrapstatistic(lossDiff, method.bootstrapParam)
+	statVec -= mean(statVec) #Centre statVec on zero (not affected by forceLocationEstimator)
 	sort!(statVec)
 	(pVal, tailRegion) = pvalue(statVec, testStat)
 	pVal > confLevel && (tailRegion = 0)
-	return(pVal, tailRegion)
+	return(pVal, tailRegion, mean(lossDiff))
 end
 #Keyword wrapper
 function dm{T1<:Number}(lossDiff::Vector{T1}; method::DMMethod=DMBootstrap(length(lossDiff)), numResample::Int=-999, blockLength::Number=-999, lagWindow::Int=-999, confLevel::Number=0.05)
@@ -394,7 +400,7 @@ function spa{T<:Number}(lD::Matrix{T}, method::SPAMethod)
 		tSPAmu = Float64[ max(0, maximum(sub(z, 1:numModel, i))) for i = 1:numResample ]
 		pValVec[q] = (1 / numResample) * sum(tSPAmu .> tSPA)
 	end
-	return(pValVec)
+	return(pValVec) #For :all, order is [u, c, l]
 end
 #Keyword wrapper
 function spa{T<:Number}(lD::Matrix{T}; method::SPAMethod=SPABootstrap(size(lD, 1)), numResample::Int=-999, blockLength::Number=-999, blockLengthFilter::Symbol=:none, hacVariant::Symbol=:none, muMethod::Symbol=:none)
@@ -440,30 +446,29 @@ end
 
 #Function for getting p-values from one-sided or two-sided statistical tests. Input can be eiter sorted vector of iid draws from relevant distribution, or an explicit distribution
 function pvalue{T<:Number}(xVec::Vector{T}, xObs::T; twoSided::Bool=true)
+	i = searchsortedlast(xVec, xObs)
 	if twoSided
-		i = searchsortedlast(xVec, xObs)
-		NHalf = 0.5 * length(xVec)
-		if i <= NHalf
-			tailRegion = 1
-			pv = i / NHalf
-		else
+		if xObs <= mean(xVec)
 			tailRegion = -1
-			pv = 2 - (i / NHalf)
+			pv = 2*(i/length(xVec))
+		else
+			tailRegion = 1
+			pv = 2*(1 - (i/length(xVec)))
 		end
 	else
 		tailRegion = 1
-		pv = 1 - (searchsortedlast(xVec, xObs) / length(xVec))
+		pv = 1 - (i/length(xVec))
 	end
 	return(pv, tailRegion)
 end
 function pvalue{T<:Number}(d::Distribution, xObs::T; twoSided::Bool=true)
 	if twoSided
 		if xObs < mean(d)
-			tailRegion = 1
+			tailRegion = -1
 			pv = 2*cdf(d, xObs)
 		else
-			tailRegion = -1
-			pv = 2*cdf(d, -1 * xObs)
+			tailRegion = 1
+			pv = 2*(1 - cdf(d, xObs))
 		end
 	else
 		tailRegion = 1
