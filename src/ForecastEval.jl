@@ -33,7 +33,10 @@ export 	ForecastEvalMethod,
 		RCBootstrap,
 		spa,
 		SPAMethod,
-		SPABootstrap
+		SPABootstrap,
+		mcs,
+		MCSMethod,
+		MCSBootstrap
 
 
 
@@ -339,8 +342,9 @@ end
 #-------- FUNCTION -------------
 #spa for bootstrap method
 function spa{T<:Number}(lD::Matrix{T}, method::SPAMethod)
+	T != Float64 && (lD = Float64[ Float64(lD[j, k]) for j = 1:size(lD, 1), k = 1:size(lD, 2) ]) #Ensure input is Float64
 	#Hansen's loss differentials have base case first
-	lD *= -1
+	lD *= -one(T)
 	#Validate inputs
 	numObs = size(lD, 1)
 	rootNumObs = sqrt(numObs)
@@ -415,6 +419,170 @@ spa{T<:Number}(xPrediction::Matrix{T}, xBaseCase::Vector{T}, xTrue::Vector{T}; l
 
 
 
+#----------------------------------------------------------
+#ROUTINE
+#	Model Confidence Set
+#OUTPUT
+#REFERENCES
+#	Hansen, Lunde, Nason (2011) "The Model Confidence Set", Econometrica, 79 (2), pp. 453-497
+#NOTES
+#	You can skip the block length selection procedure by specifying a block-length > 0
+#----------------------------------------------------------
+#Type definitions
+abstract MCSMethod <: ForecastEvalMethodNoBaseCase
+type MCSBootstrap <: MCSMethod #Method type for performing MCS
+	bp::BootstrapParam
+	blockLengthFilter::Symbol
+	function MCSBootstrap(bp::BootstrapParam, blockLengthFilter::Symbol)
+		!(blockLengthFilter == :mean || blockLengthFilter == :median || blockLengthFilter == :maximum || blockLengthFilter == :first) && error("Invalid value for blockLengthFilter")
+		new(bp, blockLengthFilter)
+	end
+end
+function MCSBootstrap(numObs::Int ; blockLength::Float64=-1.0, blockLengthFilter::Symbol=:median)
+	x = MCSBootstrap(BootstrapParam(numObs, blockLength=blockLength), blockLengthFilter)
+	return(x)
+end
+MCSBootstrap{T<:Number}(l::AbstractMatrix{T} ; blockLength::Float64=-1.0, blockLengthFilter::Symbol=:median) = MCSBootstrap(size(l, 1), blockLength=blockLength, blockLengthFilter=blockLengthFilter)
+type MCSOut #Output from MCS
+	inA::Vector{Int}
+	outA::Vector{Int}
+	pValA::Vector{Float64}
+	inB::Vector{Int}
+	outB::Vector{Int}
+	pValB::Vector{Float64}
+	MCSOut(inA::Vector{Int}, outA::Vector{Int}, pValA::Vector{Float64},	inB::Vector{Int}, outB::Vector{Int}, pValB::Vector{Float64}) = (inA, outA, pValA, inB, outB, pValB)
+end
+#Type methods
+Base.string(x::MCSBootstrap) = "mcsBootstrap"
+Base.string(x::MCSOut) = "mcsOut"
+function Base.show(io::IO, x::MCSBootstrap)
+	println(string(x) * " contents:")
+	show(io, x.bp)
+	println("Block length filter = " * string(x.blockLengthFilter))
+end
+Base.show(x::MCSBootstrap) = show(STDOUT, x)
+function Base.show(io::IO, x::MCSOut)
+	println("Model confidence set output:")
+	if length(x.pValA) == length(x.pValB) == 0
+		println("Object is empty")
+	else
+		length(x.pValA) > 0 && println("Models in MCS method A = " * string(x.inA))
+		length(x.pValB) > 0 && println("Models in MCS method B = " * string(x.inB))
+	end
+end
+Base.show(x::MCSOut) = show(STDOUT, x)
+function update!(x::MCSBootstrap ; blockLengthFilter::Symbol=:none)
+	if blockLengthFilter != :none
+		(blockLengthFilter == :mean || blockLengthFilter == :median || blockLengthFilter == :maximum || blockLengthFilter == :first) ? (x.blockLengthFilter = blockLengthFilter) : error("Invalid symbol for blockLengthFilter field")
+	end
+	return(x)
+end
+#Function for implementing the Model Confidence Set (MCS). Input l is a matrix of losses
+#ISSUE 1: Several Array{T, 3} are symmetric in the sense that x[j, k, :] = -1 * x[k, j, :]. A specialised type that reflects this symmetric would halve temporary storage and significantly reduce computational burden.
+#ISSUE 2: There are a lot of temporary array allocations inside the loop for MCS method A that could be eliminated
+#ISSUE 3: Related to ISSUE 2 -> I think that lDAvgMu, lDAvgMuStar, and lDAvgMuVar could all be computed outside the loop in MCS method A
+#ISSUE 4: For MCS method A, I think the loop over K could be terminated as soon as cumulative p-values are greater than confLevel. Need to double check this.
+#ISSUE 5: Several lines have alternatives marked "ALTERNATIVE METHOD" that need to be timed
+#ISSUE 6: Need to add option to do just max(abs) method or just sum(sq) method (or both)
+function mcs{T<:Number}(l::Matrix{T}, method::MCSBootstrap ; confLevel::Float64=0.05)
+	#Validate inputs
+	!(0.0 < confLevel < 1.0) && error("Invalid confidence level")
+	(N, K) = size(l)
+	N < 2 && error("Input must have at least two observations")
+	K < 2 && error("Input must have at least two models")
+	T != Float64 && (l = Float64[ Float64(l[j, k]) for j = 1:size(l, 1), k = 1:size(l, 2) ]) #Convert input to Float64
+	#Get block-length if necessary and then get bootstrap indices. Note, appropriate block length is estimated by examining loss differentials between models 2 to K and model 1. Checking block length on every j, k combination will take too long for large K
+	getblocklength(method.bp) <= 0.0 && multivariate_blocklength!(Float64[ l[n, k] - l[n, 1] for n = 1:N, k = 2:K ], method.bp, method.blockLengthFilter)
+	inds = dbootstrapindex(method.bp)
+	#Get matrix of loss differential sample means
+	lMuVec = mean(l, 1)
+	lDMu = Float64[ lMuVec[k] - lMuVec[j] for j = 1:K, k = 1:K  ]
+	#Get array of  bootstrapped loss differential sample means
+	lDMuStar = Array(Float64, K, K, bp.numResample) #This array is affected by ISSUE 1 above
+	for m = 1:bp.numResample
+		lMuVecStar = mean(l[inds[:, m], :], 1)
+		lDMuStar[:, :, m] = Float64[ lMuVecStar[k] - lMuVecStar[j] for j = 1:K, k = 1:K  ]
+	end
+	#Get variance estimates from bootstrapped loss differential sample means (note, we centre on lDMu since these are the population means for the resampled data)
+	#Note, for efficiency, we only use varm to fill out the lower triangular matrix
+	lDMuVar = ones(Float64, K, K)
+	for j = 2:K
+		for k = 1:j-1
+			lDMuVar[j, k] = varm(vec(lDMuStar[j, k, :]), lDMu[j, k], corrected=false)
+		end
+	end
+	ltri_to_utri!(lDMuVar)
+	#Get original and re-sampled t-statistics
+	tStatStar = Float64[ (lDMuStar[j, k, m] - lDMu[j, k]) / sqrt(lDMuVar[j, k]) for j = 1:K, k = 1:K, m = 1:bp.numResample ]
+	tStat = Float64[ lDMu[j, k] / sqrt(lDMuVar[j, k]) for j = 1:K, k = 1:K ]
+	#Perform model confidence method A
+	inA = collect(1:K) #Models in MCS (start off with all models included)
+	outA = Array(Int, K) #Models not in MCS (start off with no models in MCS)
+	pValA = ones(Float64, K) #p-values constructed in loop
+	for k = 1:K-1
+		bootMax = Float64[ maxabs(tStatStar[inA, inA, m]) for m = 1:bp.numResample ]
+		#bootMax = vec(maximum(abs(tStatStar[inA, inA, :]), [1, 2])) #ALTERNATIVE METHOD
+		origMax = maximum(tStat[inA, inA])
+		pValA[k] = mean(bootMax .> origMax)
+		scalingTerm = length(inA) / (length(inA) - 1)
+		lDAvgMu = scalingTerm * vec(mean(lDMu[inA, inA], 1))
+		lDAvgMuStar = scalingTerm * squeeze(mean(lDMuStar[inA, inA, :], 1), 1)
+		lDAvgMuVar = Float64[ varm(vec(lDAvgMuStar[k, :]), lDAvgMu[k], corrected=false) for k = 1:length(lDAvgMu) ]
+		tStatInc = lDAvgMu ./ sqrt(lDAvgMuVar)
+		iRemove = indmax(tStatInc) #Find index in inA of model to be removed
+		outA[k] = inA[iRemove] #Add model to be removed to excluded list
+		deleteat!(inA, iRemove) #Remove model to be removed
+	end
+	pValA = cummax(pValA)
+	outA[end] = inA[1] #Finish constructing excluded models
+	iCutOff = findfirst(pValA .>= confLevel) #confLevel < 1.0, hence there will always be at least one p-value > confLevel
+	inA = outA[iCutOff:end]
+	outA = outA[1:iCutOff-1]
+	#Perform model confidence set method B
+	inB = collect(1:K) #Models in MCS (start off with all models in MCS)
+	outB = Array(Int, K) #Models not in MCS (start off with no models in MCS)
+	pValB = ones(Float64, K) #p-values constructed in loop
+	for k = 1:K-1
+		bootSum = 0.5 * vec(sumabs2(tStatStar[inB, inB, :], [1, 2]))
+		origSum = 0.5 * sumabs2(tStat[inB, inB])
+		pValB[k] = mean(bootSum .> origSum)
+		scalingTerm = length(inB) / (length(inB) - 1)
+		lDAvgMu = scalingTerm * vec(mean(lDMu[inB, inB], 1))
+		lDAvgMuStar = scalingTerm * squeeze(mean(lDMuStar[inB, inB, :], 1), 1)
+		lDAvgMuVar = Float64[ varm(vec(lDAvgMuStar[k, :]), lDAvgMu[k], corrected=false) for k = 1:length(lDAvgMu) ]
+		tStatInc = lDAvgMu ./ sqrt(lDAvgMuVar)
+		iRemove = indmax(tStatInc) #Find index in inB of model to be removed
+		outB[k] = inB[iRemove] #Add model to be removed to excluded list
+		deleteat!(inB, iRemove) #Remove model to be removed
+	end
+	pValB = cummax(pValB)
+	outB[end] = inB[1] #Finish constructing excluded models
+	iCutOff = findfirst(pValB .>= confLevel) #confLevel < 1.0, hence there will always be at least one p-value > confLevel
+	inB = outB[iCutOff:end]
+	outB = outB[1:iCutOff-1]
+	#Prepare the output
+	mcsOut = MCSOut(inA, outA, pValA, inB, outB, pValB)
+end
+#Local function to shift lower triangular elements to upper triangular portion of matrix
+function ltri_to_utri!{T<:Number}(x::AbstractMatrix{T})
+	size(x, 1) != size(x, 2) && error("Input matrix  must be symmetric")
+	for j = 2:size(x, 1)
+		for k = 1:j-1
+			x[k, j] = x[j, k]
+		end
+	end
+	return(true)
+end
+#Keyword wrapper
+function mcs{T<:Number}(l::Matrix{T}; method::MCSMethod=MCSBootstrap(l), numResample::Int=1000, blockLength::Number=-1.0, blockLengthFilter::Symbol=:median, confLevel::Float64=0.05)
+	update!(method.bp, numResample=numResample, blockLength=blockLength)
+	update!(method, blockLengthFilter=blockLengthFilter)
+	return(mcs(l, method, confLevel=confLevel))
+end
+
+
+
+
 
 
 
@@ -436,7 +604,6 @@ function multivariate_blocklength!{T<:Number}(x::Matrix{T}, bp::BootstrapParam, 
 	update!(bp.bootstrapMethod, blockLength=bL)
 	return(bL, blockLengthVec)
 end
-
 
 
 
@@ -538,9 +705,3 @@ end # module
 # 	end
 # 	return(true)
 # end
-
-
-
-
-
-
