@@ -438,10 +438,8 @@ type MCSBootstrap <: MCSMethod #Method type for performing MCS
 		new(bp, blockLengthFilter)
 	end
 end
-function MCSBootstrap(numObs::Int ; blockLength::Float64=-1.0, blockLengthFilter::Symbol=:median)
-	x = MCSBootstrap(BootstrapParam(numObs, blockLength=blockLength), blockLengthFilter)
-	return(x)
-end
+MCSBootstrap(bp::BootstrapParam) = MCSBootstrap(bp, :median)
+MCSBootstrap(numObs::Int ; blockLength::Float64=-1.0, blockLengthFilter::Symbol=:median) = MCSBootstrap(BootstrapParam(numObs, blockLength=blockLength), blockLengthFilter)
 MCSBootstrap{T<:Number}(l::AbstractMatrix{T} ; blockLength::Float64=-1.0, blockLengthFilter::Symbol=:median) = MCSBootstrap(size(l, 1), blockLength=blockLength, blockLengthFilter=blockLengthFilter)
 type MCSOut #Output from MCS
 	inA::Vector{Int}
@@ -478,12 +476,9 @@ function update!(x::MCSBootstrap ; blockLengthFilter::Symbol=:none)
 	return(x)
 end
 #Function for implementing the Model Confidence Set (MCS). Input l is a matrix of losses
-#ISSUE 1: Several Array{T, 3} are symmetric in the sense that x[j, k, :] = -1 * x[k, j, :]. A specialised type that reflects this symmetric would halve temporary storage and significantly reduce computational burden.
-#ISSUE 2: There are a lot of temporary array allocations inside the loop for MCS method A that could be eliminated
-#ISSUE 3: Related to ISSUE 2 -> I think that lDAvgMu, lDAvgMuStar, and lDAvgMuVar could all be computed outside the loop in MCS method A
-#ISSUE 4: For MCS method A, I think the loop over K could be terminated as soon as cumulative p-values are greater than confLevel. Need to double check this.
-#ISSUE 5: Several lines have alternatives marked "ALTERNATIVE METHOD" that need to be timed
-#ISSUE 6: Need to add option to do just max(abs) method or just sum(sq) method (or both)
+#ISSUE 1: Some of the temporary arrays in the loops could probably be eliminated
+#ISSUE 2: For MCS method A, I think the loop over K could be terminated as soon as cumulative p-values are greater than confLevel. Need to double check this.
+#ISSUE 3: Need to add option to do just max(abs) method or just sum(sq) method (or both)
 function mcs{T<:Number}(l::Matrix{T}, method::MCSBootstrap ; confLevel::Float64=0.05)
 	#Validate inputs
 	!(0.0 < confLevel < 1.0) && error("Invalid confidence level")
@@ -498,8 +493,8 @@ function mcs{T<:Number}(l::Matrix{T}, method::MCSBootstrap ; confLevel::Float64=
 	lMuVec = mean(l, 1)
 	lDMu = Float64[ lMuVec[k] - lMuVec[j] for j = 1:K, k = 1:K  ]
 	#Get array of  bootstrapped loss differential sample means
-	lDMuStar = Array(Float64, K, K, bp.numResample) #This array is affected by ISSUE 1 above
-	for m = 1:bp.numResample
+	lDMuStar = Array(Float64, K, K, method.bp.numResample) #This array is affected by ISSUE 1 above
+	for m = 1:method.bp.numResample
 		lMuVecStar = mean(l[inds[:, m], :], 1)
 		lDMuStar[:, :, m] = Float64[ lMuVecStar[k] - lMuVecStar[j] for j = 1:K, k = 1:K  ]
 	end
@@ -513,14 +508,14 @@ function mcs{T<:Number}(l::Matrix{T}, method::MCSBootstrap ; confLevel::Float64=
 	end
 	ltri_to_utri!(lDMuVar)
 	#Get original and re-sampled t-statistics
-	tStatStar = Float64[ (lDMuStar[j, k, m] - lDMu[j, k]) / sqrt(lDMuVar[j, k]) for j = 1:K, k = 1:K, m = 1:bp.numResample ]
+	tStatStar = Float64[ (lDMuStar[j, k, m] - lDMu[j, k]) / sqrt(lDMuVar[j, k]) for j = 1:K, k = 1:K, m = 1:method.bp.numResample ]
 	tStat = Float64[ lDMu[j, k] / sqrt(lDMuVar[j, k]) for j = 1:K, k = 1:K ]
 	#Perform model confidence method A
 	inA = collect(1:K) #Models in MCS (start off with all models included)
 	outA = Array(Int, K) #Models not in MCS (start off with no models in MCS)
 	pValA = ones(Float64, K) #p-values constructed in loop
 	for k = 1:K-1
-		bootMax = Float64[ maxabs(tStatStar[inA, inA, m]) for m = 1:bp.numResample ]
+		bootMax = Float64[ maxabs(tStatStar[inA, inA, m]) for m = 1:method.bp.numResample ]
 		#bootMax = vec(maximum(abs(tStatStar[inA, inA, :]), [1, 2])) #ALTERNATIVE METHOD
 		origMax = maximum(tStat[inA, inA])
 		pValA[k] = mean(bootMax .> origMax)
@@ -563,6 +558,85 @@ function mcs{T<:Number}(l::Matrix{T}, method::MCSBootstrap ; confLevel::Float64=
 	#Prepare the output
 	mcsOut = MCSOut(inA, outA, pValA, inB, outB, pValB)
 end
+function mcs_optim{T<:Number}(l::Matrix{T}, method::MCSBootstrap ; confLevel::Float64=0.05)
+	#Validate inputs
+	!(0.0 < confLevel < 1.0) && error("Invalid confidence level")
+	(N, K) = size(l)
+	N < 2 && error("Input must have at least two observations")
+	K < 2 && error("Input must have at least two models")
+	T != Float64 && (l = Float64[ Float64(l[j, k]) for j = 1:size(l, 1), k = 1:size(l, 2) ]) #Convert input to Float64
+	#Get block-length if necessary and then get bootstrap indices. Note, appropriate block length is estimated by examining loss differentials between models 2 to K and model 1. Checking block length on every j, k combination will take too long for large K
+	getblocklength(method.bp) <= 0.0 && multivariate_blocklength!(Float64[ l[n, k] - l[n, 1] for n = 1:N, k = 2:K ], method.bp, method.blockLengthFilter)
+	inds = dbootstrapindex(method.bp)
+	#Get matrix of loss differential sample means
+	lMuVec = vec(mean(l, 1))
+	iM = ltri_cart_index(collect(1:K)) #Build a matrix of lower triangular cartesian indices
+	S = size(iM, 1) #Total number of cross series
+	lDMuCross = Float64[ lMuVec[iM[s, 2]] - lMuVec[iM[s, 1]] for s = 1:S ] #diag = 0.0, utri = -1.0*ltri
+	#Get array of  bootstrapped loss differential sample means
+	lDMuCrossStar = Array(Float64, S, method.bp.numResample)
+	for m = 1:method.bp.numResample
+		lMuVecStar = mean(l[inds[:, m], :], 1)
+		lDMuCrossStar[:, m] = Float64[ lMuVecStar[iM[s, 2]] - lMuVecStar[iM[s, 1]] for s = 1:S ] #diag = 0.0, utri = -1.0*ltri
+	end
+	#Get variance estimates from bootstrapped loss differential sample means (note, we centre on lDMu since these are the population means for the resampled data)
+	lDMuCrossVar = Float64[ varm(lDMuCrossStar[s, :], lDMuCross[s], corrected=false) for s = 1:S ] #diag = 1.0, utri = ltri
+	#Get original and re-sampled t-statistics
+	tStatCrossStar = Float64[ (lDMuCrossStar[s, m] - lDMuCross[s]) / sqrt(lDMuCrossVar[s]) for s = 1:S, m = 1:method.bp.numResample ] #diag = 0.0, utri = -1.0*ltri
+	tStatCross = Float64[ lDMuCross[s] / sqrt(lDMuCrossVar[s]) for s = 1:S ] #diag = 0.0, utri = -1.0*ltri
+	#Perform model confidence method A
+	inA = collect(1:K) #Models in MCS (start off with all models included)
+	outA = Array(Int, K) #Models not in MCS (start off with no models in MCS)
+	pValA = ones(Float64, K) #p-values constructed in loop
+	for k = 1:K-1
+		iIn = ltri_index_match(K, inA) #Linear indices of models that are still in the MCS
+		bootMaxIn = Float64[ maxabs(tStatCrossStar[iIn, m]) for m = 1:method.bp.numResample ]
+		origMaxIn = maxabs(tStatCross[iIn])
+		pValA[k] = mean(bootMaxIn .> origMaxIn)
+		lDAvgMuCross = vec(mean(msym_mat_from_ltri_inds(lDMuCross, iIn), 1))
+		lDAvgMuCrossStar = Array(Float64, method.bp.numResample, trinumroot(length(iIn))+1)
+		for s = 1:method.bp.numResample
+			lDAvgMuCrossStar[s, :] = mean(msym_mat_from_ltri_inds(lDMuCrossStar[:, s], iIn), 1)
+		end
+		lDAvgMuCrossVar = Float64[ varm(lDAvgMuCrossStar[:, k], lDAvgMuCross[k], corrected=false) for k = 1:length(lDAvgMuCross) ]
+		tStatCrossInc = lDAvgMuCross ./ sqrt(lDAvgMuCrossVar)
+		iRemove = indmax(tStatCrossInc) #Find index in inA of model to be removed
+		outA[k] = inA[iRemove] #Add model to be removed to excluded list
+		deleteat!(inA, iRemove) #Remove model to be removed
+	end
+	pValA = cummax(pValA)
+	outA[end] = inA[1] #Finish constructing excluded models
+	iCutOff = findfirst(pValA .>= confLevel) #confLevel < 1.0, hence there will always be at least one p-value > confLevel
+	inA = outA[iCutOff:end]
+	outA = outA[1:iCutOff-1]
+	#Perform model confidence set method B
+	inB = collect(1:K) #Models in MCS (start off with all models in MCS)
+	outB = Array(Int, K) #Models not in MCS (start off with no models in MCS)
+	pValB = ones(Float64, K) #p-values constructed in loop
+	for k = 1:K-1
+		iIn = ltri_index_match(K, inB) #Linear indices of models that are still in the MCS
+		bootSumIn = vec(sumabs2(tStatCrossStar[iIn, :], 1))
+		origSumIn = sumabs2(tStatCross[iIn])
+		pValB[k] = mean(bootSumIn .> origSumIn)
+		lDAvgMuCross = vec(mean(msym_mat_from_ltri_inds(lDMuCross, iIn), 1))
+		lDAvgMuCrossStar = Array(Float64, method.bp.numResample, trinumroot(length(iIn))+1)
+		for s = 1:method.bp.numResample
+			lDAvgMuCrossStar[s, :] = mean(msym_mat_from_ltri_inds(lDMuCrossStar[:, s], iIn), 1)
+		end
+		lDAvgMuCrossVar = Float64[ varm(lDAvgMuCrossStar[:, k], lDAvgMuCross[k], corrected=false) for k = 1:length(lDAvgMuCross) ]
+		tStatCrossInc = lDAvgMuCross ./ sqrt(lDAvgMuCrossVar)
+		iRemove = indmax(tStatCrossInc) #Find index in inB of model to be removed
+		outB[k] = inB[iRemove] #Add model to be removed to excluded list
+		deleteat!(inB, iRemove) #Remove model to be removed
+	end
+	pValB = cummax(pValB)
+	outB[end] = inB[1] #Finish constructing excluded models
+	iCutOff = findfirst(pValB .>= confLevel) #confLevel < 1.0, hence there will always be at least one p-value > confLevel
+	inB = outB[iCutOff:end]
+	outB = outB[1:iCutOff-1]
+	#Prepare the output
+	mcsOut = MCSOut(inA, outA, pValA, inB, outB, pValB)
+end
 #Local function to shift lower triangular elements to upper triangular portion of matrix
 function ltri_to_utri!{T<:Number}(x::AbstractMatrix{T})
 	size(x, 1) != size(x, 2) && error("Input matrix  must be symmetric")
@@ -572,6 +646,43 @@ function ltri_to_utri!{T<:Number}(x::AbstractMatrix{T})
 		end
 	end
 	return(true)
+end
+#Local function for triangular numbers
+trinum(K::Int) = Int((K*(K+1))/2)
+trinumroot(triNum::Int) = Int((sqrt(8*triNum + 1) - 1) / 2)
+#Local functions for matching lower triangular cartesian indices to a linear index
+ltri_index_match(K::Int, i::Int, j::Int) = trinum(K-1) - trinum(K-j-1) - K + i
+function ltri_index_match(K::Int, cartInds::Matrix{Int})
+	size(cartInds, 2) != 2 && error("Invalid cartesian index matrix")
+	tnK = trinum(K-1)
+	return(Int[ tnK - trinum(K - cartInds[s, 2] - 1) - K + cartInds[s, 1] for s = 1:size(cartInds, 1) ])
+end
+ltri_index_match(K::Int, inds::Vector{Int}) = ltri_index_match(K, ltri_cart_index(inds))
+#Local function for constructing a matrix of lower triangular cartesian indices
+function ltri_cart_index(inds::Vector{Int})
+	indsOut = Array(Int, trinum(length(inds)-1), 2)
+	c = 1
+	for k = 1:length(inds)-1
+		for j = k+1:length(inds)
+			indsOut[c, 1] = inds[j]
+			indsOut[c, 2] = inds[k]
+			c += 1
+		end
+	end
+	return(indsOut)
+end
+#Local function for constructing a matrix from a lower triangle using linear indices (no diagonal), and minus one times the lower triangle (no diagonal). Two components are stuck together transposed to each other.
+function msym_mat_from_ltri_inds{T<:Number}(x::AbstractVector{T}, linInds::Vector{Int})
+	K = trinumroot(length(linInds))
+	xOut = Array(T, K, K+1)
+	iSt = 1
+	for k = K:-1:1
+		triCol = x[linInds[iSt:iSt+k-1]]
+		xOut[K-k+1:end, K-k+1] = triCol
+		xOut[K-k+1, K-k+2:end] = -1.0 * triCol
+		iSt += k
+	end
+	return(xOut)
 end
 #Keyword wrapper
 function mcs{T<:Number}(l::Matrix{T}; method::MCSMethod=MCSBootstrap(l), numResample::Int=1000, blockLength::Number=-1.0, blockLengthFilter::Symbol=:median, confLevel::Float64=0.05)
