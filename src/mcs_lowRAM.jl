@@ -14,7 +14,7 @@ function mcs{T<:Number}(l::Matrix{T}, method::MCSBootLowRAM)::MCSTest
 	#Get array of  bootstrapped loss differential sample means
 	lDMuCrossStar = Array(Float64, S, numResample)
 	for m = 1:numResample
-		lMuVecStar = mean(l[inds[:, m], :], 1)
+		lMuVecStar = mean(l[inds[m], :], 1)
 		lDMuCrossStar[:, m] = Float64[ lMuVecStar[iM[s, 2]] - lMuVecStar[iM[s, 1]] for s = 1:S ] #diag = 0.0, utri = -1.0*ltri
 	end
 	#Get variance estimates from bootstrapped loss differential sample means (note, we centre on lDMu since these are the population means for the resampled data)
@@ -44,7 +44,7 @@ function mcs{T<:Number}(l::Matrix{T}, method::MCSBootLowRAM)::MCSTest
 	end
 	pValA = cummax(pValA)
 	outA[end] = inA[1] #Finish constructing excluded models
-	iCutOff = findfirst(pValA .>= confLevel) #confLevel < 1.0, hence there will always be at least one p-value > confLevel
+	iCutOff = findfirst(pValA .>= method.alpha) #method.alpha < 1.0, hence there will always be at least one p-value > method.alpha
 	inA = outA[iCutOff:end]
 	outA = outA[1:iCutOff-1]
 	#Perform model confidence method B
@@ -69,7 +69,7 @@ function mcs{T<:Number}(l::Matrix{T}, method::MCSBootLowRAM)::MCSTest
 	end
 	pValB = cummax(pValB)
 	outB[end] = inB[1] #Finish constructing excluded models
-	iCutOff = findfirst(pValB .>= confLevel) #confLevel < 1.0, hence there will always be at least one p-value > confLevel
+	iCutOff = findfirst(pValB .>= method.alpha) #method.alpha < 1.0, hence there will always be at least one p-value > method.alpha
 	inB = outB[iCutOff:end]
 	outB = outB[1:iCutOff-1]
 	#Prepare the output

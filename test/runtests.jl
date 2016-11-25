@@ -11,10 +11,10 @@ using ForecastEval
 	srand(1234)
 	bO = dm(ld, dmmethod=:boot)
 	hO = dm(ld, dmmethod=:hac)
-	@test (bO.rejH0, bO.bestinput, bO.tailregion) == (0, 1, 0)
+	@test (bO.rejH0, bO.bestinput) == (false, 1)
 	@test isapprox(bO.pvalue, 0.42599999999999993)
 	@test isapprox(bO.teststat, -0.23500198562777386)
-	@test (hO.rejH0, hO.bestinput, hO.tailregion) == (0, 1, 0)
+	@test (hO.rejH0, hO.bestinput) == (false, 1)
 	@test isapprox(hO.pvalue, 0.5016201102228858)
 	@test isapprox(hO.teststat, -0.6719428022372147)
 end
@@ -23,7 +23,7 @@ end
 	srand(1234)
 	ld = randn(100, 20)
 	rcOut = rc(ld)
-	@test rcOut.rejH0 == 0
+	@test rcOut.rejH0 == false
 	@test isapprox(rcOut.pvalue, 0.762)
 end
 
@@ -31,7 +31,7 @@ end
 	srand(1234)
 	ld = randn(100, 5)
 	spaOut = spa(ld)
-	@test spaOut.rejH0 == 0
+	@test spaOut.rejH0 == false
 	@test isapprox(sum(spaOut.mu_u), 0.026125507727482858)
 	@test isapprox(sum(spaOut.mu_c), 0.026125507727482858)
 	@test isapprox(sum(spaOut.mu_l), 0.21071619368258687)
@@ -52,4 +52,12 @@ end
 	@test mcsOut.inMT == Int[5,2,3,7,4,8,6,1]
 	@test mcsOut.outMT == Int[]
 	@test isapprox(sum(mcsOut.pvalueMT), 6.673)
+	srand(1234)
+	mcsLROut = mcs(l, MCSBootLowRAM(l))
+	@test mcsLROut.inQF == Int[5,2,3,7,4,8,6,1]
+	@test mcsLROut.outQF == Int[]
+	@test isapprox(sum(mcsLROut.pvalueQF), 6.604)
+	@test mcsLROut.inMT == Int[5,2,3,7,4,8,6,1]
+	@test mcsLROut.outMT == Int[]
+	@test isapprox(sum(mcsLROut.pvalueMT), 6.563)
 end

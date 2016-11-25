@@ -60,12 +60,12 @@ Output type for a Diebold-Mariano test. A description of the fields follows: \n
     dmmethod <- Diebold-Mariano method used in the test. See ?DMMethod for more detail.
 """
 type DMTest
-    rejH0::Int
+    rejH0::Bool
     pvalue::Float64
     bestinput::Int
     teststat::Float64
     dmmethod::DMMethod
-    DMTest(rejH0::Int, pvalue::Float64, bestinput::Int, teststat::Float64, dmmethod::DMMethod) = new(rejH0, pvalue, bestinput, teststat, dmmethod)
+    DMTest(rejH0::Bool, pvalue::Float64, bestinput::Int, teststat::Float64, dmmethod::DMMethod) = new(rejH0, pvalue, bestinput, teststat, dmmethod)
 end
 
 #Constructors for DMHAC

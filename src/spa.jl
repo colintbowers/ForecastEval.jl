@@ -57,10 +57,6 @@ type SPATest
 	pvalue_l::Float64 #pvalue associated with mu_l
 	pvalueauto::Float64 #Recommended p-value (usually pvalue_c except in rare situations)
 	teststat::Float64 #SPA test statistic
-	function SPATest(rejH0::Int, mu_u::Vector{Float64}, mu_c::Vector{Float64}, mu_l::Vector{Float64}, pvalue_u::Float64, pvalue_c::Float64,
-					pvalue_l::Float64, pvalue::Float64, teststat::Float64)
-		new(rejH0, mu_u, mu_c, mu_l, pvalue_u, pvalue_c, pvalue_l, pvalue, teststat)
-	end
 end
 
 

@@ -18,6 +18,8 @@ The following multivariate forecast evaluation procedures are implemented:
 
 This package should be added using `Pkg.add("ForecastEval")`, and can then be called with `using ForecastEval`. The package has three dependencies (currently): StatsBase, Distributions, and DependentBootstrap. Support for DataFrames may be added in the future, depending on demand versus the burden of additional dependencies.
 
+Note, this package requires Julia v0.5+.
+
 ## Usage
 
 In these notes, I will briefly cover the names of the main functions, input types, and output types. All of these functions/types have been documented extensively using Julia's docstrings capability, and so users can find out detailed information about the tests of interest using the `?x` command at the Julia REPL, where `x` denotes the function name or type name of interest.
@@ -76,4 +78,4 @@ Please use `?x`, where `x` is any of these names, at the REPL for more informati
 
 A keyword signature for `mcs` is also provided and it is anticipated that most users will interact with the test in this way. Please type `?mcs` at the REPL for more information.
 
-Note, the `MCSBootLowRAM` uses a different algorithm to `MCSBoot` that has roughly half the RAM requirements but takes twice as long to run (although I have not tested this extensively). The vast majority of users will want to use `MCSBoot`, since `MCSBootLowRAM` doesn't allow many additional forecast models to be included (RAM requirements go up by a power law in the number of models, not linearly). I would be very receptive to any pull requests that are able to speed up the run-time of `MCSBootLowRAM`. The essential difference between the two algorithms is that `MCSBoot` wastes additional RAM but with the benefit of being able to perform `mean` computations on matrices in column-major order.  
+The `MCSBootLowRAM` uses a different algorithm to `MCSBoot` that has roughly half the RAM requirements but takes twice as long to run. Note that the `MCSBootLowRAM` results are not guaranteed to be identical to those of `MCSBoot`. The vast majority of users will want to use `MCSBoot`, since `MCSBootLowRAM` doesn't allow many additional forecast models to be included (RAM requirements go up by a power law in the number of models, not linearly). I would be very receptive to any pull requests that are able to speed up the run-time of `MCSBootLowRAM`. The essential difference between the two algorithms is that `MCSBoot` wastes additional RAM but with the benefit of being able to perform `mean` computations on matrices in column-major order.  

@@ -26,6 +26,7 @@ export 	DMMethod,
 		spa,
 		MCSMethod,
 		MCSBoot,
+		MCSBootLowRAM,
 		MCSTest,
 		mcs
 

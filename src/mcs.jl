@@ -36,10 +36,13 @@ end
 	MCSBootLowRAM(data ; alpha::Float64=0.05, blocklength::Number=0.0, numresample::Number=1000, bootmethod::Symbol=:stationary, blmethod::Symbol=:dummy, basecaseindex::Int=1)
 
 Method type for doing an MCS test using a dependent bootstrap. This method type has identical fields to MCSBoot, so use ?MCSBoot
-for more detail.
+for more detail on constructing this type.
 
 WARNING: This method corresponds to a MCS algorithm that has double the runtime of MCSBoot, but uses about half as much RAM. The
 vast majority of users will want to use MCSBoot.
+
+WARNING: Results from MCSBootLowRAM are not guaranteed to be identical to those from MCSBoot, although they are extremely likely to
+both recommend the same set of models in the model confidence set.
 """
 type MCSBootLowRAM <: MCSMethod
 	alpha::Float64
@@ -81,7 +84,7 @@ end
 function MCSBoot(data ; alpha::Float64=0.05, blocklength::Number=0.0, numresample::Number=1000, bootmethod::Symbol=:stationary, blmethod::Symbol=:dummy, basecaseindex::Int=1)::MCSBoot
     return(MCSBoot(alpha, BootInput(loss_diff_base_case(data, basecaseindex), blocklength=blocklength, numresample=numresample, bootmethod=bootmethod, blmethod=blmethod), basecaseindex))
 end
-function MCSBootLowRAM(data ; alpha::Float64=0.05, blocklength::Number=0.0, numresample::Number=1000, bootmethod::Symbol=:stationary, blmethod::Symbol=:dummy, basecaseindex::Int=1)::MCSBoot
+function MCSBootLowRAM(data ; alpha::Float64=0.05, blocklength::Number=0.0, numresample::Number=1000, bootmethod::Symbol=:stationary, blmethod::Symbol=:dummy, basecaseindex::Int=1)::MCSBootLowRAM
     return(MCSBootLowRAM(alpha, BootInput(loss_diff_base_case(data, basecaseindex), blocklength=blocklength, numresample=numresample, bootmethod=bootmethod, blmethod=blmethod), basecaseindex))
 end
 function loss_diff_base_case{T<:Number}(l::Matrix{T}, basecaseindex::Int)

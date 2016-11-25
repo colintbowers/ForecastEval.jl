@@ -7,7 +7,7 @@ Obtain the p-value associated with the inputs.
 d::ContinuousUnivariateDistribution -> d is the distribution under the null and x is the test statistic.
 d::Vector{T} -> d is a bootstrapped vector of test statistics and x is the value of the test statistic under the null.
 """
-function pvaluelocal(d::ContinuousUnivariateDistribution, x::Number ; tail::Symbol=:both)::Tuple{Float64, Int}
+function pvaluelocal(d::ContinuousUnivariateDistribution, x::Number ; tail::Symbol=:both)::Float64
 	if tail == :both
 		lpv = cdf(d, x)
 		rpv = ccdf(d, x)
@@ -21,7 +21,7 @@ function pvaluelocal(d::ContinuousUnivariateDistribution, x::Number ; tail::Symb
 		error("Keyword argument tail=$(tail) is invalid")
 	end
 end
-function pvaluelocal{T<:Number}(xVec::Vector{T}, x::Number ; tail::Symbol=:both, as::Bool=false)::Tuple{Float64, Int}
+function pvaluelocal{T<:Number}(xVec::Vector{T}, x::Number ; tail::Symbol=:both, as::Bool=false)::Float64
 	!as && (xVec = sort(xVec))
 	i = searchsortedlast(xVec, x)
 	if tail == :both
