@@ -1,5 +1,8 @@
 # ForecastEval
 
+[![Build Status](https://travis-ci.org/colintbowers/ForecastEval.jl.svg?branch=master)](https://travis-ci.org/colintbowers/ForecastEval.jl)
+
+
 A module for the Julia language that implements several statistical tests from the forecast evaluation literature.
 
 ## Main features
