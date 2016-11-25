@@ -10,6 +10,7 @@ abstract SPAMethod
 
 """
 	SPABoot(alpha::Float64, bootinput::BootInput, kernelfunction::Symbol, bandwidth::Int)
+    SPABoot(data ; alpha::Float64=0.05, blocklength::Number=0.0, numresample::Number=1000, bootmethod::Symbol=:stationary, blmethod::Symbol=:dummy, kernelfunction::Symbol=:epanechnikov, bandwidth::Int=-1)
 
 Method type for doing an SPA test using a dependent bootstrap. Fields are: \n
 	alpha <- Confidence level of test

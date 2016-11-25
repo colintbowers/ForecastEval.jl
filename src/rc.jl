@@ -10,6 +10,7 @@ abstract RCMethod
 
 """
     RCBoot(alpha::Float64, bootinput::BootInput)
+    RCBoot(data ; alpha::Float64=0.05, blocklength::Number=0.0, numresample::Number=1000, bootmethod::Symbol=:stationary, blmethod::Symbol=:dummy)
 
 Method type for doing a Reality Check using a dependent bootstrap.
 The fields of this type follow: \n
