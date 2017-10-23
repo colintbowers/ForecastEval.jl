@@ -1,10 +1,10 @@
 
 #Kernel functions for use with hacvariance estimator
-abstract KernelFunction
-type KernelEpanechnikov <: KernelFunction ; end
-type KernelGaussian <: KernelFunction ; end
-type KernelUniform <: KernelFunction ; end
-type KernelBartlett <: KernelFunction ; end
+abstract type KernelFunction end
+struct KernelEpanechnikov <: KernelFunction ; end
+struct KernelGaussian <: KernelFunction ; end
+struct KernelUniform <: KernelFunction ; end
+struct KernelBartlett <: KernelFunction ; end
 function symbol_to_kernel_func(s::Symbol)::KernelFunction
 	s == :epanechnikov && return(KernelEpanechnikov())
 	s == :gaussian && return(KernelGaussian())
@@ -26,11 +26,11 @@ The function has the following keyword arguments:
 	kf <- Kernel function used in estimator. Valid values are :epanechnikov, :gaussian, :uniform, :bartlett
 	bw <- Bandwidth used in estimator. If <= -1, then estimate bandwidth using Politis (2003) "Adaptive Bandwidth Choice"
 """
-function hacvariance{T<:Number}(x::AbstractVector{T} ; kf::Symbol=:epanechnikov, bw::Int=-1)::Tuple{Float64, Int}
+function hacvariance(x::AbstractVector{T} ; kf::Symbol=:epanechnikov, bw::Int=-1)::Tuple{Float64, Int} where {T<:Number}
 	if bw <= -1
 		(bw, v, xCov) = DependentBootstrap.bandwidth_politis_2003(x)
 	else
-		(v, xCov) = (var(x), Array(Float64, 0))
+		(v, xCov) = (var(x), Array{Float64}(0))
 	end
 	length(xCov) < bw && append!(xCov, autocov(x, length(xCov)+1:bw)) #Get any additional autocovariances that we might need
 	kf = symbol_to_kernel_func(kf)
@@ -38,5 +38,5 @@ function hacvariance{T<:Number}(x::AbstractVector{T} ; kf::Symbol=:epanechnikov,
 	for m = 1:bw
 		v += 2 * kernelAdjTerm * kernel_eval(m, bw, kf) * xCov[m]
 	end
-	return(max(v, 0.0), bw)
+	return (max(v, 0.0), bw)
 end

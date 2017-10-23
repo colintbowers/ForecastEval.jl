@@ -6,7 +6,7 @@ Abstract type for nesting the various methods that can be used to perform an SPA
     SPABoot \n
 The subtypes have entries in the help (?) menu.
 """
-abstract SPAMethod
+abstract type SPAMethod end
 
 """
 	SPABoot(alpha::Float64, bootinput::BootInput, kernelfunction::Symbol, bandwidth::Int)
@@ -18,7 +18,7 @@ Method type for doing an SPA test using a dependent bootstrap. Fields are: \n
 	kernelfunction <- Kernel function to use in HAC variance estimator. See ?spa for more detail.
     bandwidth::Int <- Bandwidth to use in HAC variance estimator. See ?spa for more detail.
 """
-type SPABoot <: SPAMethod
+mutable struct SPABoot <: SPAMethod
 	alpha::Float64
 	bootinput::BootInput
 	kernelfunction::Symbol
@@ -47,7 +47,7 @@ for this type follow those in the referenced paper, so see that paper for more d
 Note the different mu variables, {u, c, l} are described in the referenced article on p370-371. \n
 Most users will just be interested in the field pvalueauto.
 """
-type SPATest
+mutable struct SPATest
 	rejH0::Bool
 	mu_u::Vector{Float64} #mu associated with upper bound on threshold rate
 	mu_c::Vector{Float64} #Recommended mu
@@ -92,7 +92,7 @@ Note, Hansen suggests using the Stationary Bootstrap implied HAC variance estima
 However, it is not necessary to use this estimator, since any consistent HAC estimator is valid and in many cases may be preferred.
 Currently supported kernel functions for the HAC estimator are :epanechnikov, :gaussian, :uniform, :bartlett.
 """
-function spa{T<:Number}(lD::Matrix{T}, method::SPABoot)::SPATest
+function spa(lD::Matrix{T}, method::SPABoot)::SPATest where {T<:Number}
 	lD *= -1.0	#Hansen's loss differentials have base case first
 	numObs = size(lD, 1)
 	numModel = size(lD, 2)
@@ -101,14 +101,14 @@ function spa{T<:Number}(lD::Matrix{T}, method::SPABoot)::SPATest
 	numModel < 1 && error("Input dataset is empty")
 	inds = dbootinds(method.bootinput) #Get bootstrap indices
 	#Get hac variance estimators
-	wSqVec = Array(Float64, numModel)
+	wSqVec = Array{Float64}(numModel)
 	for k = 1:numModel
 		(wSqVec[k], _) = hacvariance(lD[:, k], kf=method.kernelfunction, bw=method.bandwidth)
 		wSqVec[k] <= 0.0 && (wSqVec[k] = nextfloat(0.0))
 	end
 	wInv = Float64[ 1 / sqrt(wSqVec[k]) for k = 1:numModel ]
 	#Get bootstrapped mean loss differentials
-	mldBoot = Array(Float64, numModel, numResample)
+	mldBoot = Array{Float64}(numModel, numResample)
 	for j = 1:numResample
 		for k = 1:numModel
 			mldBoot[k, j] = mean(view(lD, 1:numObs, k)[inds[j]])
@@ -123,7 +123,7 @@ function spa{T<:Number}(lD::Matrix{T}, method::SPABoot)::SPATest
 	tSPA = maximum([ max(sqrt(numObs) * mu_u[k] * wInv[k], 0) for k = 1:numModel ])
 	#Get p-values for each mu term
 	muVecVec = Vector{Float64}[mu_u, mu_c, mu_l] #Order must be u, c, l
-	pValVec = Array(Float64, length(muVecVec))
+	pValVec = Array{Float64}(length(muVecVec))
 	for q = 1:length(muVecVec)
 		z = sqrt(numObs) * (wInv .* (mldBoot .- muVecVec[q]))
 		tSPAmu = Float64[ max(0, maximum(view(z, 1:numModel, i))) for i = 1:numResample ]
@@ -135,7 +135,7 @@ function spa{T<:Number}(lD::Matrix{T}, method::SPABoot)::SPATest
 	return(spaTest)
 end
 #Keyword wrapper
-function spa{T<:Number}(lossDiff::Matrix{T} ; alpha::Float64=0.05, blocklength::Number=0.0, numresample::Number=1000, bootmethod::Symbol=:stationary, blmethod::Symbol=:dummy,
-				 kernelfunction::Symbol=:epanechnikov, bandwidth::Int=-1)::SPATest
+function spa(lossDiff::Matrix{T} ; alpha::Float64=0.05, blocklength::Number=0.0, numresample::Number=1000, bootmethod::Symbol=:stationary, blmethod::Symbol=:dummy,
+				 kernelfunction::Symbol=:epanechnikov, bandwidth::Int=-1)::SPATest where {T<:Number}
 	return(spa(lossDiff, SPABoot(lossDiff, alpha=alpha, blocklength=blocklength, numresample=numresample, bootmethod=bootmethod, blmethod=blmethod, kernelfunction=kernelfunction, bandwidth=bandwidth)))
 end

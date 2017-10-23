@@ -7,7 +7,7 @@ Abstract type for nesting the various methods that can be used to perform Diebol
     DMBoot \n
 The subtypes have entries in the help (?) menu.
 """
-abstract DMMethod
+abstract type DMMethod end
 
 """
     DMHAC(alpha::Float64, kernelfunction::Symbol, bandwidth::Int)
