@@ -6,7 +6,7 @@ Abstract type for nesting the various methods that can be used to perform a Real
     RCBoot \n
 The subtypes have entries in the help (?) menu.
 """
-abstract RCMethod
+abstract type RCMethod end
 
 """
     RCBoot(alpha::Float64, bootinput::BootInput)
@@ -17,7 +17,7 @@ The fields of this type follow: \n
     alpha <- Confidence level for the test
     bootinput <- Specifies type of bootstrap method to use. See DependentBootstrap package or ?rc for more detail
 """
-type RCBoot <: RCMethod
+mutable struct RCBoot <: RCMethod
     alpha::Float64
 	bootinput::BootInput
     function RCBoot(alpha::Float64, bootinput::BootInput)
@@ -34,14 +34,14 @@ The fields of this type follow: \n
     rejH0 <- true if the null is rejected, false otherwise
     pvalue <- p-value from the test
 """
-type RCTest
+struct RCTest
     rejH0::Bool
     pvalue::Float64
 end
 
 #Constructors for RCBoot
 function RCBoot(data ; alpha::Float64=0.05, blocklength::Number=0.0, numresample::Number=1000, bootmethod::Symbol=:stationary, blmethod::Symbol=:dummy)::RCBoot
-    return(RCBoot(alpha, BootInput(data, blocklength=blocklength, numresample=numresample, bootmethod=bootmethod, blmethod=blmethod)))
+    return (RCBoot(alpha, BootInput(data, blocklength=blocklength, numresample=numresample, bootmethod=bootmethod, blmethod=blmethod)))
 end
 
 #Functions for types
@@ -65,7 +65,7 @@ It is anticipated that most users will use the keyword method variant. An explan
 For more detail on the bootstrap options and methods, please see the docs for the DependentBootstrap package. \n
 The output of a Reality Check test is of type RCTest. Use ?RCTest for more information.
 """
-function rc{T<:Number}(lD::Matrix{T}, method::RCBoot)::RCTest
+function rc(lD::Matrix{T}, method::RCBoot)::RCTest where {T<:Number}
     lD *= -1 #White's loss differentials have base case first
 	numObs = size(lD, 1)
 	numModel = size(lD, 2)
@@ -75,7 +75,7 @@ function rc{T<:Number}(lD::Matrix{T}, method::RCBoot)::RCTest
 	inds = dbootinds(method.bootinput) #Bootstrap indices
     #Get mean loss differentials and bootstrapped mean loss differentials
 	mld = Float64[ mean(view(lD, 1:numObs, k)) for k = 1:numModel ]
-	mldBoot = Array(Float64, numModel, numResample)
+	mldBoot = Array{Float64}(numModel, numResample)
 	for j = 1:numResample
 		for k = 1:numModel
 			mldBoot[k, j] = mean(view(lD, 1:numObs, k)[inds[j]])
@@ -90,6 +90,6 @@ function rc{T<:Number}(lD::Matrix{T}, method::RCBoot)::RCTest
 	return(RCTest(rejH0, pVal))
 end
 #Keyword method
-function rc{T<:Number}(lD::Matrix{T} ; alpha::Float64=0.05, blocklength::Number=0.0, numresample::Number=1000, bootmethod::Symbol=:stationary, blmethod::Symbol=:dummy)::RCTest
+function rc(lD::Matrix{T} ; alpha::Float64=0.05, blocklength::Number=0.0, numresample::Number=1000, bootmethod::Symbol=:stationary, blmethod::Symbol=:dummy)::RCTest where {T<:Number}
     return(rc(lD, RCBoot(lD, alpha=alpha, blocklength=blocklength, numresample=numresample, bootmethod=bootmethod, blmethod=blmethod)))
 end

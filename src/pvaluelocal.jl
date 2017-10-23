@@ -21,7 +21,7 @@ function pvaluelocal(d::ContinuousUnivariateDistribution, x::Number ; tail::Symb
 		error("Keyword argument tail=$(tail) is invalid")
 	end
 end
-function pvaluelocal{T<:Number}(xVec::Vector{T}, x::Number ; tail::Symbol=:both, as::Bool=false)::Float64
+function pvaluelocal(xVec::Vector{T}, x::Number ; tail::Symbol=:both, as::Bool=false)::Float64 where {T<:Number}
 	!as && (xVec = sort(xVec))
 	i = searchsortedlast(xVec, x)
 	if tail == :both

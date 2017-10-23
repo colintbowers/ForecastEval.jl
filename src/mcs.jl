@@ -7,7 +7,7 @@ Abstract type for nesting the various methods that can be used to perform a mode
 	MCSBootLowRAM
 The subtypes have entries in the help (?) menu.
 """
-abstract MCSMethod
+abstract type MCSMethod end
 
 """
 	MCSBoot(alpha::Float64, bootinput::BootInput, basecaseindex::Int)
@@ -21,7 +21,7 @@ Method type for doing an MCS test using a dependent bootstrap. Fields are:
 						  input loss matrix. Note, it would take too long to check optimal block length across all possible combinations of
 						  columns which is why basecaseindex exists, even though the MCS method has no natural base case.
 """
-type MCSBoot <: MCSMethod
+mutable struct MCSBoot <: MCSMethod
 	alpha::Float64
 	bootinput::BootInput
 	basecaseindex::Int
@@ -44,7 +44,7 @@ vast majority of users will want to use MCSBoot.
 WARNING: Results from MCSBootLowRAM are not guaranteed to be identical to those from MCSBoot, although they are extremely likely to
 both recommend the same set of models in the model confidence set.
 """
-type MCSBootLowRAM <: MCSMethod
+mutable struct MCSBootLowRAM <: MCSMethod
 	alpha::Float64
 	bootinput::BootInput
 	basecaseindex::Int
@@ -70,7 +70,7 @@ The fields of this type follow: \n
 	outMT <- Models that are not in the MCS via the max t-stat method
 	pvalueMT <- The cumulative p-values from the max t-stat method
 """
-type MCSTest #Output from MCS
+mutable struct MCSTest #Output from MCS
 	inQF::Vector{Int}
 	outQF::Vector{Int}
 	pvalueQF::Vector{Float64}
@@ -87,7 +87,7 @@ end
 function MCSBootLowRAM(data ; alpha::Float64=0.05, blocklength::Number=0.0, numresample::Number=1000, bootmethod::Symbol=:stationary, blmethod::Symbol=:dummy, basecaseindex::Int=1)::MCSBootLowRAM
     return(MCSBootLowRAM(alpha, BootInput(loss_diff_base_case(data, basecaseindex), blocklength=blocklength, numresample=numresample, bootmethod=bootmethod, blmethod=blmethod), basecaseindex))
 end
-function loss_diff_base_case{T<:Number}(l::Matrix{T}, basecaseindex::Int)
+function loss_diff_base_case(l::Matrix{T}, basecaseindex::Int) where {T<:Number}
 	!(1 <= basecaseindex <= size(l, 2)) && error("basecaseindex = $(basecaseindex), which does not lie between 1 and $(size(l,2)) (inclusive)")
 	lD = l[:, 1:size(l, 2) .!= basecaseindex] .- l[:, basecaseindex]
 	return(lD)
@@ -128,7 +128,7 @@ Note, for any developers, the main algorithm (associated with MCSBoot) still has
 	ISSUE 3: Need to add option to do just max(abs) method or just sum(sq) method (or both)
 Comments or pull requests on these issues would be most welcome on the package github page.
 """
-function mcs{T<:Number}(l::Matrix{T}, method::MCSBoot)::MCSTest
+function mcs(l::Matrix{T}, method::MCSBoot)::MCSTest where {T<:Number}
 	(N, K) = size(l)
 	N < 2 && error("Input must have at least two observations")
 	K < 2 && error("Input must have at least two models")
@@ -140,7 +140,7 @@ function mcs{T<:Number}(l::Matrix{T}, method::MCSBoot)::MCSTest
 	lMuVec = mean(l, 1)
 	lDMu = Float64[ lMuVec[k] - lMuVec[j] for j = 1:K, k = 1:K  ]
 	#Get array of  bootstrapped loss differential sample means
-	lDMuStar = Array(Float64, K, K, numResample) #This array is affected by ISSUE 1 above
+	lDMuStar = Array{Float64}(K, K, numResample) #This array is affected by ISSUE 1 above
 	for m = 1:numResample
 		lMuVecStar = mean(l[inds[m], :], 1)
 		lDMuStar[:, :, m] = Float64[ lMuVecStar[k] - lMuVecStar[j] for j = 1:K, k = 1:K  ]
@@ -159,32 +159,32 @@ function mcs{T<:Number}(l::Matrix{T}, method::MCSBoot)::MCSTest
 	tStat = Float64[ lDMu[j, k] / sqrt(lDMuVar[j, k]) for j = 1:K, k = 1:K ]
 	#Perform model confidence set method A
 	inA = collect(1:K) #Models in MCS (start off with all models in MCS)
-	outA = Array(Int, K) #Models not in MCS (start off with no models in MCS)
+	outA = Array{Int}(K) #Models not in MCS (start off with no models in MCS)
 	pValA = ones(Float64, K) #p-values constructed in loop
 	for k = 1:K-1
-		bootSum = 0.5 * vec(sumabs2(tStatStar[inA, inA, :], [1, 2]))
-		origSum = 0.5 * sumabs2(tStat[inA, inA])
+		bootSum = 0.5 * vec(sum(abs2, tStatStar[inA, inA, :], [1, 2]))
+		origSum = 0.5 * sum(abs2, tStat[inA, inA])
 		pValA[k] = mean(bootSum .> origSum)
 		scalingTerm = length(inA) / (length(inA) - 1)
 		lDAvgMu = scalingTerm * vec(mean(lDMu[inA, inA], 1))
 		lDAvgMuStar = scalingTerm * squeeze(mean(lDMuStar[inA, inA, :], 1), 1)
 		lDAvgMuVar = Float64[ varm(vec(lDAvgMuStar[k, :]), lDAvgMu[k], corrected=false) for k = 1:length(lDAvgMu) ]
-		tStatInc = lDAvgMu ./ sqrt(lDAvgMuVar)
+		tStatInc = lDAvgMu ./ sqrt.(lDAvgMuVar)
 		iRemove = indmax(tStatInc) #Find index in inA of model to be removed
 		outA[k] = inA[iRemove] #Add model to be removed to excluded list
 		deleteat!(inA, iRemove) #Remove model to be removed
 	end
-	pValA = cummax(pValA)
+	pValA = accumulate(max, pValA)
 	outA[end] = inA[1] #Finish constructing excluded models
 	iCutOff = findfirst(pValA .>= method.alpha) #method.alpha < 1.0, hence there will always be at least one p-value > method.alpha
 	inA = outA[iCutOff:end]
 	outA = outA[1:iCutOff-1]
 	#Perform model confidence method B
 	inB = collect(1:K) #Models in MCS (start off with all models included)
-	outB = Array(Int, K) #Models not in MCS (start off with no models in MCS)
+	outB = Array{Int}(K) #Models not in MCS (start off with no models in MCS)
 	pValB = ones(Float64, K) #p-values constructed in loop
 	for k = 1:K-1
-		bootMax = Float64[ maxabs(tStatStar[inB, inB, m]) for m = 1:numResample ]
+		bootMax = Float64[ maximum(abs, tStatStar[inB, inB, m]) for m = 1:numResample ]
 		#bootMax = vec(maximum(abs(tStatStar[inB, inB, :]), [1, 2])) #ALTERNATIVE METHOD
 		origMax = maximum(tStat[inB, inB])
 		pValB[k] = mean(bootMax .> origMax)
@@ -192,12 +192,12 @@ function mcs{T<:Number}(l::Matrix{T}, method::MCSBoot)::MCSTest
 		lDAvgMu = scalingTerm * vec(mean(lDMu[inB, inB], 1))
 		lDAvgMuStar = scalingTerm * squeeze(mean(lDMuStar[inB, inB, :], 1), 1)
 		lDAvgMuVar = Float64[ varm(vec(lDAvgMuStar[k, :]), lDAvgMu[k], corrected=false) for k = 1:length(lDAvgMu) ]
-		tStatInc = lDAvgMu ./ sqrt(lDAvgMuVar)
+		tStatInc = lDAvgMu ./ sqrt.(lDAvgMuVar)
 		iRemove = indmax(tStatInc) #Find index in inB of model to be removed
 		outB[k] = inB[iRemove] #Add model to be removed to excluded list
 		deleteat!(inB, iRemove) #Remove model to be removed
 	end
-	pValB = cummax(pValB)
+	pValB = accumulate(max, pValB)
 	outB[end] = inB[1] #Finish constructing excluded models
 	iCutOff = findfirst(pValB .>= method.alpha) #method.alpha < 1.0, hence there will always be at least one p-value > method.alpha
 	inB = outB[iCutOff:end]
@@ -206,7 +206,7 @@ function mcs{T<:Number}(l::Matrix{T}, method::MCSBoot)::MCSTest
 	mcsOut = MCSTest(inA, outA, pValA, inB, outB, pValB)
 end
 #Local function to shift lower triangular elements to upper triangular portion of matrix
-function ltri_to_utri!{T<:Number}(x::AbstractMatrix{T})
+function ltri_to_utri!(x::AbstractMatrix{T}) where {T<:Number}
 	size(x, 1) != size(x, 2) && error("Input matrix  must be symmetric")
 	for j = 2:size(x, 1)
 		for k = 1:j-1
@@ -217,7 +217,7 @@ function ltri_to_utri!{T<:Number}(x::AbstractMatrix{T})
 end
 
 #Keyword wrapper
-function mcs{T<:Number}(l::Matrix{T} ; alpha::Float64=0.05, blocklength::Number=0.0, numresample::Number=1000, bootmethod::Symbol=:stationary,
-						blmethod::Symbol=:dummy, basecaseindex::Int=1)::MCSTest
+function mcs(l::Matrix{T} ; alpha::Float64=0.05, blocklength::Number=0.0, numresample::Number=1000, bootmethod::Symbol=:stationary,
+						blmethod::Symbol=:dummy, basecaseindex::Int=1)::MCSTest where {T<:Number}
 	return(mcs(l, MCSBoot(l, alpha=alpha, blocklength=blocklength, numresample=numresample, bootmethod=bootmethod, blmethod=blmethod, basecaseindex=basecaseindex)))
 end
