@@ -9,15 +9,25 @@ The subtypes have entries in the help (?) menu.
 abstract type RCMethod end
 
 """
-    RCBoot(alpha::Float64, bootinput::BootInput)
-    RCBoot(data ; alpha::Float64=0.05, blocklength::Number=0.0, numresample::Number=1000, bootmethod::Symbol=:stationary, blmethod::Symbol=:dummy)
+    RCBoot(data ; alpha::Float64=0.05, bootinput_kwargs...)
 
-Method type for doing a Reality Check using a dependent bootstrap.
-The fields of this type follow: \n
-    alpha <- Confidence level for the test
-    bootinput <- Specifies type of bootstrap method to use. See DependentBootstrap package or ?rc for more detail
+Method type for doing a Reality Check using a dependent bootstrap. A constructor
+that takes the data and several keyword arguments is provided. The data refers
+to the loss differences for each forecast relative to the basecase. Use ?rc for more detail.
+Relevant keyword arguments are:
+    alpha=0.05 <- The confidence level to use in the test \n
+    kernelfunction=KernelEpanechnikov() <- The kernel function to use with HAC variance estimator. See ?hacvariance for more detail. \n
+    bandwidth=-1 <- The bandwidth for HAC variance estimator. If bandwidth <= -1 then bandwidth is estimated using Politis (2003) "Adaptive Bandwidth Choice" \n
+    blocklength=0.0 <- Block length to use with the bootstrap. Default of 0.0 implies
+        the block length will be optimally estimated from the data use the method deemed
+        most appropriate by the DependentBootstrap package (typically the selection procedure
+        of Patton, Politis, and White (2009)). \n
+    numresample=1000 <- Number of resamples to use when bootstrapping. \n
+    bootmethod=:stationary <- Bootstrap methodology to use, where the default is the
+        stationary bootstrap of Politis and Romano (1993) \n
+See the DependentBootstrap package docs for more info on bootstrap input keyword arguments.
 """
-mutable struct RCBoot <: RCMethod
+struct RCBoot <: RCMethod
     alpha::Float64
 	bootinput::BootInput
     function RCBoot(alpha::Float64, bootinput::BootInput)
@@ -25,6 +35,7 @@ mutable struct RCBoot <: RCMethod
         new(alpha, bootinput)
     end
 end
+RCBoot(data ; alpha::Float64=0.05, kwargs...)::RCBoot = RCBoot(alpha, BootInput(data, kwargs...))
 
 """
     RCTest(rejH0::Int, pvalue::Float64)
@@ -38,34 +49,37 @@ struct RCTest
     rejH0::Bool
     pvalue::Float64
 end
-
-#Constructors for RCBoot
-function RCBoot(data ; alpha::Float64=0.05, blocklength::Number=0.0, numresample::Number=1000, bootmethod::Symbol=:stationary, blmethod::Symbol=:dummy)::RCBoot
-    return (RCBoot(alpha, BootInput(data, blocklength=blocklength, numresample=numresample, bootmethod=bootmethod, blmethod=blmethod)))
+function Base.show(io::IO, a::RCBoot)
+    println("Reality Check test results:")
+    println("    Reject null hypothesis: $(a.rejH0)")
+    println("    p-value: $(a.pvalue)")
 end
 
-#Functions for types
-Base.show(io::IO, a::RCBoot) = println(io, "rcBoot")
 
 """
-	rc{T<:Number}(lD::Matrix{T}, method::RCBoot)::Float64
-    rc{T<:Number}(lD::Matrix{T} ; alpha::Float64=0.05, blocklength::Number=0.0, numresample::Number=1000, bootmethod::Symbol=:stationary, blmethod::Symbol=:dummy)
+	rc(lD::Matrix{T}, method ; kwargs)
+    rc(lD::Matrix{T} ; kwargs)
 
 This function implements the test proposed in White (2000) "A Reality Check for Data Snooping" following the methodology in Hansen (2005). \n
 Let x_0 denote a base-case forecast, x_k, k = 1, ..., K, denote K alternative forecasts, and y denote the forecast target.
 Let L(., .) denote a loss function. The first argument of rc is a matrix where the kth column of the matrix is created by the operation: \n
 L(x_k, y) - L(x_0, y) \n
-Note that the forecast loss comes first and the base case loss comes second. This is the opposite to what is described in White's paper.
-It is anticipated that most users will use the keyword method variant. An explanation of the keywords follows:
-    alpha <- Confidence level of the test
-    blocklength <- The bootstrap block length. If blocklength <= 0.0 then block length is estimated.
-    numresample <- The bootstrap number of resamples.
-    bootmethod <- The block bootstrap method.
-    blmethod <- The block length selection method. blmethod = :dummy implies auto-select block length method \n
-For more detail on the bootstrap options and methods, please see the docs for the DependentBootstrap package. \n
+Note that the forecast loss comes first and the base case loss comes second. This is the opposite to what is described in White's paper. \n
+The second method argument determines which methodology to use. Currently, only RCBoot is available and if
+this input type is provided, the keyword arguments are not needed.
+Alternatively, the user can omit the second argument, and then any keyword arguments will be passed to the
+RCBoot constructor. See ?RCBoot for more detail. The most relevant keyword arguments are:
+    alpha=0.05 <- The confidence level to use in the test \n
+    blocklength=0.0 <- Block length to use with the bootstrap. Default of 0.0 implies
+        the block length will be optimally estimated from the data use the method deemed
+        most appropriate by the DependentBootstrap package (typically the selection procedure
+        of Patton, Politis, and White (2009)). \n
+    numresample=1000 <- Number of resamples to use when bootstrapping. \n
+    bootmethod=:stationary <- Bootstrap methodology to use, where the default is the
+        stationary bootstrap of Politis and Romano (1993) \n
 The output of a Reality Check test is of type RCTest. Use ?RCTest for more information.
 """
-function rc(lD::Matrix{T}, method::RCBoot)::RCTest where {T<:Number}
+function rc(lD::Matrix{<:Number}, method::RCBoot)::RCTest
     lD *= -1 #White's loss differentials have base case first
 	numObs = size(lD, 1)
 	numModel = size(lD, 2)
@@ -75,7 +89,7 @@ function rc(lD::Matrix{T}, method::RCBoot)::RCTest where {T<:Number}
 	inds = dbootinds(method.bootinput) #Bootstrap indices
     #Get mean loss differentials and bootstrapped mean loss differentials
 	mld = Float64[ mean(view(lD, 1:numObs, k)) for k = 1:numModel ]
-	mldBoot = Array{Float64}(numModel, numResample)
+	mldBoot = Array{Float64}(undef, numModel, numResample)
 	for j = 1:numResample
 		for k = 1:numModel
 			mldBoot[k, j] = mean(view(lD, 1:numObs, k)[inds[j]])
@@ -83,13 +97,15 @@ function rc(lD::Matrix{T}, method::RCBoot)::RCTest where {T<:Number}
 	end
 	#Get RC test statistic and bootstrapped density under the null
 	v = maximum(sqrt(numObs) * mld)
-	vBoot = maximum(sqrt(numObs) * (mldBoot .- mld), 1)
+	vBoot = maximum(sqrt(numObs) * (mldBoot .- mld), dims=1)
 	#Calculate p-value and return (as vector)
 	pVal = sum(vBoot .> v) / numResample
     pVal < method.alpha ? (rejH0 = true) : (rejH0 = false)
-	return(RCTest(rejH0, pVal))
+	return RCTest(rejH0, pVal)
 end
 #Keyword method
-function rc(lD::Matrix{T} ; alpha::Float64=0.05, blocklength::Number=0.0, numresample::Number=1000, bootmethod::Symbol=:stationary, blmethod::Symbol=:dummy)::RCTest where {T<:Number}
-    return(rc(lD, RCBoot(lD, alpha=alpha, blocklength=blocklength, numresample=numresample, bootmethod=bootmethod, blmethod=blmethod)))
+rc(lD::Matrix{<:Number} ; kwargs...)::RCTest = rc(lD, RCBoot(lD ; kwargs...))
+function rc(lD::Matrix{<:Number}, method ; kwargs...)::RCTest
+    method == :boot && return rc(lD, RCBoot(lD ; kwargs...))
+    error("Invalid method: $(method)")
 end

@@ -11,12 +11,12 @@ function pvaluelocal(d::ContinuousUnivariateDistribution, x::Number ; tail::Symb
 	if tail == :both
 		lpv = cdf(d, x)
 		rpv = ccdf(d, x)
-		lpv < rpv && return(min(2*lpv, 1.0))
-		return(min(2*rpv, 1.0))
+		lpv < rpv && return min(2*lpv, 1.0)
+		return min(2*rpv, 1.0)
 	elseif tail == :left
-	    return(cdf(d, x))
+	    return cdf(d, x)
 	elseif tail == :right
-	    return(ccdf(d, x))
+	    return ccdf(d, x)
 	else
 		error("Keyword argument tail=$(tail) is invalid")
 	end
@@ -27,12 +27,12 @@ function pvaluelocal(xVec::Vector{T}, x::Number ; tail::Symbol=:both, as::Bool=f
 	if tail == :both
 		lpv = Float64(i / length(xVec))
 		rpv = 1.0 - lpv
-		lpv < rpv && return(min(2*lpv, 1.0))
-		return(min(2*rpv, 1.0))
+		lpv < rpv && return min(2*lpv, 1.0)
+		return min(2*rpv, 1.0)
 	elseif tail == :left
-		return(Float64(i / length(xVec)))
+		return Float64(i / length(xVec))
 	elseif tail == :right
-		return(Float64(1.0 - (i / length(xVec))))
+		return Float64(1.0 - (i / length(xVec)))
 	else
 		error("Keyword argument tail=$(tail) is invalid")
 	end

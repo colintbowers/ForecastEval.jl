@@ -10,18 +10,28 @@ The subtypes have entries in the help (?) menu.
 abstract type MCSMethod end
 
 """
-	MCSBoot(alpha::Float64, bootinput::BootInput, basecaseindex::Int)
-	MCSBoot(data ; alpha::Float64=0.05, blocklength::Number=0.0, numresample::Number=1000, bootmethod::Symbol=:stationary, blmethod::Symbol=:dummy, basecaseindex::Int=1)
+	MCSBoot(data ; alpha, basecaseindex, kwargs...)
 
-Method type for doing an MCS test using a dependent bootstrap. Fields are:
-	alpha <- Confidence level to use with the MCS
-	bootinput <- Specifies type of bootstrap method to use. See DependentBootstrap package or ?spa for more detail
-	basecaseindex <- If calculating an optimal block length for use with the bootstrap, then the algorithm only uses loss differentials
-						  constructed relative to an arbitrary base case, indexed by basecaseindex, which should refer to one column of the
-						  input loss matrix. Note, it would take too long to check optimal block length across all possible combinations of
-						  columns which is why basecaseindex exists, even though the MCS method has no natural base case.
+Method type for doing a MCS test using a dependent bootstrap. Relevant keyword arguments are: \n
+    alpha=0.05 <- The confidence level to use in the test \n
+	basecaseindex=1 <- The MCS does not have a natural basecase. However, the input data is a
+		matrix of losses, not loss differentials, and the method itself considers every possible
+		loss differential combination. This is far too many to check for determining
+		the optimal block length for bootstrapping, so users who wish to auto-estimate
+		the appropriate block length can specify a notional base case variable index
+		for the purposes of computing a optimal block lengths of all loss differences
+		relative to the base case.
+    blocklength=0.0 <- Block length to use with the bootstrap. Default of 0.0 implies
+        the block length will be optimally estimated from the data use the method deemed
+        most appropriate by the DependentBootstrap package (typically the selection procedure
+        of Patton, Politis, and White (2009)). \n
+    numresample=1000 <- Number of resamples to use when bootstrapping. \n
+    bootmethod=:stationary <- Bootstrap methodology to use, where the default is the
+        stationary bootstrap of Politis and Romano (1993) \n
+Note, see the DependentBootstrap docs for more information on valid keyword arguments
+for the BootInput constructor.
 """
-mutable struct MCSBoot <: MCSMethod
+struct MCSBoot <: MCSMethod
 	alpha::Float64
 	bootinput::BootInput
 	basecaseindex::Int
@@ -30,21 +40,23 @@ mutable struct MCSBoot <: MCSMethod
 		new(alpha, bootinput, basecaseindex)
 	end
 end
+function MCSBoot(data ; alpha::Float64=0.05, basecaseindex::Int=1, kwargs...)::MCSBoot
+    return MCSBoot(alpha, BootInput(loss_diff_base_case(data, basecaseindex), kwargs...), basecaseindex)
+end
 
 """
-	MCSBootLowRAM(alpha::Float64, bootinput::BootInput, basecaseindex::Int)
-	MCSBootLowRAM(data ; alpha::Float64=0.05, blocklength::Number=0.0, numresample::Number=1000, bootmethod::Symbol=:stationary, blmethod::Symbol=:dummy, basecaseindex::Int=1)
+	MCSBootLowRAM(data ; alpha::Float64=0.05, kwargs...)
 
-Method type for doing an MCS test using a dependent bootstrap. This method type has identical fields to MCSBoot, so use ?MCSBoot
-for more detail on constructing this type.
+Method type for doing an MCS test using a dependent bootstrap. This method type has an identical
+constructor arguments to MCSBoot, so use ?MCSBoot for more detail.
 
 WARNING: This method corresponds to a MCS algorithm that has double the runtime of MCSBoot, but uses about half as much RAM. The
 vast majority of users will want to use MCSBoot.
 
-WARNING: Results from MCSBootLowRAM are not guaranteed to be identical to those from MCSBoot, although they are extremely likely to
-both recommend the same set of models in the model confidence set.
+WARNING: Results from MCSBootLowRAM are not guaranteed to be identical to those from MCSBoot in finite sample, although they
+are very likely to both recommend the same set of models in the model confidence set.
 """
-mutable struct MCSBootLowRAM <: MCSMethod
+struct MCSBootLowRAM <: MCSMethod
 	alpha::Float64
 	bootinput::BootInput
 	basecaseindex::Int
@@ -53,6 +65,17 @@ mutable struct MCSBootLowRAM <: MCSMethod
 		new(alpha, bootinput, basecaseindex)
 	end
 end
+function MCSBootLowRAM(data ; alpha::Float64=0.05, basecaseindex::Int=1, kwargs...)::MCSBootLowRAM
+    return MCSBootLowRAM(alpha, BootInput(loss_diff_base_case(data, basecaseindex), kwargs...), basecaseindex)
+end
+
+"loss_diff_base_case <- Local function for getting loss differences relative to notional base case for purposes of estimating the block length"
+function loss_diff_base_case(l::Matrix{<:Number}, basecaseindex::Int)
+	!(1 <= basecaseindex <= size(l, 2)) && error("basecaseindex = $(basecaseindex), which does not lie between 1 and $(size(l,2)) (inclusive)")
+	lD = l[:, 1:size(l, 2) .!= basecaseindex] .- l[:, basecaseindex]
+	return lD
+end
+
 
 """
 	MCSTest(inQF::Vector{Int}, outQF::Vector{Int}, pvalueQF::Vector{Float64}, inMT::Vector{Int}, outMT::Vector{Int}, pvalueMT::Vector{Float64})
@@ -70,7 +93,7 @@ The fields of this type follow: \n
 	outMT <- Models that are not in the MCS via the max t-stat method
 	pvalueMT <- The cumulative p-values from the max t-stat method
 """
-mutable struct MCSTest #Output from MCS
+struct MCSTest #Output from MCS
 	inQF::Vector{Int}
 	outQF::Vector{Int}
 	pvalueQF::Vector{Float64}
@@ -79,29 +102,16 @@ mutable struct MCSTest #Output from MCS
 	pvalueMT::Vector{Float64}
 	MCSTest(inQF::Vector{Int}, outQF::Vector{Int}, pvalueQF::Vector{Float64}, inMT::Vector{Int}, outMT::Vector{Int}, pvalueMT::Vector{Float64}) = new(inQF, outQF, pvalueQF, inMT, outMT, pvalueMT)
 end
-
-#Keyword constructor
-function MCSBoot(data ; alpha::Float64=0.05, blocklength::Number=0.0, numresample::Number=1000, bootmethod::Symbol=:stationary, blmethod::Symbol=:dummy, basecaseindex::Int=1)::MCSBoot
-    return(MCSBoot(alpha, BootInput(loss_diff_base_case(data, basecaseindex), blocklength=blocklength, numresample=numresample, bootmethod=bootmethod, blmethod=blmethod), basecaseindex))
+function Base.show(io::IO, a::MCSTest)
+	println("Model confidence test results:")
+	println("    Quadratic form test models in MCS: $(a.inQF)")
+	println("    Maximum t-stat test models in MCS: $(a.inMT)")
 end
-function MCSBootLowRAM(data ; alpha::Float64=0.05, blocklength::Number=0.0, numresample::Number=1000, bootmethod::Symbol=:stationary, blmethod::Symbol=:dummy, basecaseindex::Int=1)::MCSBootLowRAM
-    return(MCSBootLowRAM(alpha, BootInput(loss_diff_base_case(data, basecaseindex), blocklength=blocklength, numresample=numresample, bootmethod=bootmethod, blmethod=blmethod), basecaseindex))
-end
-function loss_diff_base_case(l::Matrix{T}, basecaseindex::Int) where {T<:Number}
-	!(1 <= basecaseindex <= size(l, 2)) && error("basecaseindex = $(basecaseindex), which does not lie between 1 and $(size(l,2)) (inclusive)")
-	lD = l[:, 1:size(l, 2) .!= basecaseindex] .- l[:, basecaseindex]
-	return(lD)
-end
-
-#Type methods
-Base.show(io::IO, x::MCSBoot) = "mcsBoot"
-Base.show(io::IO, x::MCSBootLowRAM) = "mcsBootLowRAM"
-Base.show(io::IO, x::MCSTest) = "mcsTest"
 
 
 """
-	mcs{T<:Number}(l::Matrix{T}, method::MCSMethod)::MCSTest
-	mcs{T<:Number}(l::Matrix{T} ; alpha::Float64=0.05, blocklength::Number=0.0, numresample::Number=1000, bootmethod::Symbol=:stationary, blmethod::Symbol=:dummy, basecaseindex::Int=1)::MCSTest
+	mcs(l::Matrix{<:Number}, method ; kwargs...)
+	mcs(l::Matrix{<:Number} ; kwargs...)
 
 This function implements the MCS test proposed in Hansen, Lunde, Nason (2011) "The Model Confidence Set", Econometrica, 79 (2), pp. 453-497. \n
 Let x_k, k = 1, ..., K, denote K forecasts (from K different forecasting models), and y denote the forecast target.
@@ -109,23 +119,33 @@ Let L(., .) denote a loss function.
 The first argument of mcs is a matrix where the kth column of the matrix is created by the operation: \n
 L(x_k, y) \n
 Note that unlike the Reality Check and SPA test, there is no base case for the MCS. \n
-It is anticipated that most users will use the keyword method variant. An explanation of the keywords follows: \n
-	alpha <- The confidence level of the test
-	blocklength <- The block bootstrap block length. If blocklength <= 0.0 then block length is estimated.
-	numresample <- The block bootstrap number of resamples.
-	bootmethod <- The block bootstrap method.
-	blmethod <- The block length selection method. blmethod = :dummy implies auto-select block length method
-	basecaseindex <- If calculating an optimal block length for use with the bootstrap, then the algorithm only uses loss differentials
-						  constructed relative to an arbitrary base case, indexed by basecaseindex, which should refer to one column of the
-						  input loss matrix. Note, it would take too long to check optimal block length across all possible combinations of
-						  columns which is why basecaseindex exists, even though the MCS method has no natural base case.
+The second method argument determines which methodology to use. Currently, only MCSBoot is available and if
+this input type is provided, the keyword arguments are not needed.
+Alternatively, the user can omit the second argument, and then any keyword arguments will be passed to the
+MCSBoot constructor. See ?MCSBoot for more detail. The most relevant keyword arguments are:
+    alpha=0.05 <- The confidence level to use in the test \n
+	basecaseindex=1 <- The MCS does not have a natural basecase. However, the input data is a
+		matrix of losses, not loss differentials, and the method itself considers every possible
+		loss differential combination. This is far too many to check for determining
+		the optimal block length for bootstrapping, so users who wish to auto-estimate
+		the appropriate block length can specify a notional base case variable index
+		for the purposes of computing a optimal block lengths of all loss differences
+		relative to the base case.
+    blocklength=0.0 <- Block length to use with the bootstrap. Default of 0.0 implies
+        the block length will be optimally estimated from the data use the method deemed
+        most appropriate by the DependentBootstrap package (typically the selection procedure
+        of Patton, Politis, and White (2009)). \n
+    numresample=1000 <- Number of resamples to use when bootstrapping. \n
+    bootmethod=:stationary <- Bootstrap methodology to use, where the default is the
+        stationary bootstrap of Politis and Romano (1993) \n
 For more detail on the bootstrap options, please see the docs for the DependentBootstrap package. \n
+The output of a MCS test is of type MCSTest. Use ?MCSTest for more information. \n
 Note, if you are hitting RAM limits, type ?ForecastEval.MCSBootLowRAM at the REPL for more detail on an alternative algorithm that
 is also available. \n
-Note, for any developers, the main algorithm (associated with MCSBoot) still has the following potential performance issues:
-	ISSUE 1: Some of the temporary arrays in the loops could probably be eliminated
-	ISSUE 2: For MCS method A, I think the loop over K could be terminated as soon as cumulative p-values are greater than method.alpha. Need to double check this.
-	ISSUE 3: Need to add option to do just max(abs) method or just sum(sq) method (or both)
+Note, for any developers, the main algorithm (associated with MCSBoot) still has the following potential performance issues: \n
+	ISSUE 1: Some of the temporary arrays in the loops could probably be eliminated \n
+	ISSUE 2: For MCS method A, I think the loop over K could be terminated as soon as cumulative p-values are greater than method.alpha. Need to double check this. \n
+	ISSUE 3: Need to add option to do just max(abs) method or just sum(sq) method (or both) \n
 Comments or pull requests on these issues would be most welcome on the package github page.
 """
 function mcs(l::Matrix{T}, method::MCSBoot)::MCSTest where {T<:Number}
@@ -137,12 +157,12 @@ function mcs(l::Matrix{T}, method::MCSBoot)::MCSTest where {T<:Number}
 	#Get bootstrap indices
 	inds = dbootinds(method.bootinput)
 	#Get matrix of loss differential sample means
-	lMuVec = mean(l, 1)
+	lMuVec = mean(l, dims=1)
 	lDMu = Float64[ lMuVec[k] - lMuVec[j] for j = 1:K, k = 1:K  ]
 	#Get array of  bootstrapped loss differential sample means
-	lDMuStar = Array{Float64}(K, K, numResample) #This array is affected by ISSUE 1 above
+	lDMuStar = Array{Float64}(undef, K, K, numResample) #This array is affected by ISSUE 1 above
 	for m = 1:numResample
-		lMuVecStar = mean(l[inds[m], :], 1)
+		lMuVecStar = mean(l[inds[m], :], dims=1)
 		lDMuStar[:, :, m] = Float64[ lMuVecStar[k] - lMuVecStar[j] for j = 1:K, k = 1:K  ]
 	end
 	#Get variance estimates from bootstrapped loss differential sample means (note, we centre on lDMu since these are the population means for the resampled data)
@@ -159,18 +179,18 @@ function mcs(l::Matrix{T}, method::MCSBoot)::MCSTest where {T<:Number}
 	tStat = Float64[ lDMu[j, k] / sqrt(lDMuVar[j, k]) for j = 1:K, k = 1:K ]
 	#Perform model confidence set method A
 	inA = collect(1:K) #Models in MCS (start off with all models in MCS)
-	outA = Array{Int}(K) #Models not in MCS (start off with no models in MCS)
+	outA = Array{Int}(undef, K) #Models not in MCS (start off with no models in MCS)
 	pValA = ones(Float64, K) #p-values constructed in loop
 	for k = 1:K-1
-		bootSum = 0.5 * vec(sum(abs2, tStatStar[inA, inA, :], [1, 2]))
+		bootSum = 0.5 * vec(sum(abs2, tStatStar[inA, inA, :], dims=(1,2)))
 		origSum = 0.5 * sum(abs2, tStat[inA, inA])
 		pValA[k] = mean(bootSum .> origSum)
 		scalingTerm = length(inA) / (length(inA) - 1)
-		lDAvgMu = scalingTerm * vec(mean(lDMu[inA, inA], 1))
-		lDAvgMuStar = scalingTerm * squeeze(mean(lDMuStar[inA, inA, :], 1), 1)
+		lDAvgMu = scalingTerm * vec(mean(lDMu[inA, inA], dims=1))
+		lDAvgMuStar = scalingTerm * dropdims(mean(lDMuStar[inA, inA, :], dims=1), dims=1)
 		lDAvgMuVar = Float64[ varm(vec(lDAvgMuStar[k, :]), lDAvgMu[k], corrected=false) for k = 1:length(lDAvgMu) ]
 		tStatInc = lDAvgMu ./ sqrt.(lDAvgMuVar)
-		iRemove = indmax(tStatInc) #Find index in inA of model to be removed
+		iRemove = argmax(tStatInc) #Find index in inA of model to be removed
 		outA[k] = inA[iRemove] #Add model to be removed to excluded list
 		deleteat!(inA, iRemove) #Remove model to be removed
 	end
@@ -181,7 +201,7 @@ function mcs(l::Matrix{T}, method::MCSBoot)::MCSTest where {T<:Number}
 	outA = outA[1:iCutOff-1]
 	#Perform model confidence method B
 	inB = collect(1:K) #Models in MCS (start off with all models included)
-	outB = Array{Int}(K) #Models not in MCS (start off with no models in MCS)
+	outB = Array{Int}(undef, K) #Models not in MCS (start off with no models in MCS)
 	pValB = ones(Float64, K) #p-values constructed in loop
 	for k = 1:K-1
 		bootMax = Float64[ maximum(abs, tStatStar[inB, inB, m]) for m = 1:numResample ]
@@ -189,11 +209,11 @@ function mcs(l::Matrix{T}, method::MCSBoot)::MCSTest where {T<:Number}
 		origMax = maximum(tStat[inB, inB])
 		pValB[k] = mean(bootMax .> origMax)
 		scalingTerm = length(inB) / (length(inB) - 1)
-		lDAvgMu = scalingTerm * vec(mean(lDMu[inB, inB], 1))
-		lDAvgMuStar = scalingTerm * squeeze(mean(lDMuStar[inB, inB, :], 1), 1)
+		lDAvgMu = scalingTerm * vec(mean(lDMu[inB, inB], dims=1))
+		lDAvgMuStar = scalingTerm * dropdims(mean(lDMuStar[inB, inB, :], dims=1), dims=1)
 		lDAvgMuVar = Float64[ varm(vec(lDAvgMuStar[k, :]), lDAvgMu[k], corrected=false) for k = 1:length(lDAvgMu) ]
 		tStatInc = lDAvgMu ./ sqrt.(lDAvgMuVar)
-		iRemove = indmax(tStatInc) #Find index in inB of model to be removed
+		iRemove = argmax(tStatInc) #Find index in inB of model to be removed
 		outB[k] = inB[iRemove] #Add model to be removed to excluded list
 		deleteat!(inB, iRemove) #Remove model to be removed
 	end
@@ -215,9 +235,5 @@ function ltri_to_utri!(x::AbstractMatrix{T}) where {T<:Number}
 	end
 	return(true)
 end
-
 #Keyword wrapper
-function mcs(l::Matrix{T} ; alpha::Float64=0.05, blocklength::Number=0.0, numresample::Number=1000, bootmethod::Symbol=:stationary,
-						blmethod::Symbol=:dummy, basecaseindex::Int=1)::MCSTest where {T<:Number}
-	return(mcs(l, MCSBoot(l, alpha=alpha, blocklength=blocklength, numresample=numresample, bootmethod=bootmethod, blmethod=blmethod, basecaseindex=basecaseindex)))
-end
+mcs(l::Matrix{<:Number} ; kwargs...)::MCSTest = mcs(l, MCSBoot(l, kwargs...))

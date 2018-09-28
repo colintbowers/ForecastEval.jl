@@ -31,8 +31,6 @@ export 	DMMethod,
 		mcs
 
 
-const KERNEL_FUNCTIONS = Symbol[:epanechnikov, :gaussian, :uniform, :bartlett]::Vector{Symbol}
-
 include("hacvariance.jl")
 include("pvaluelocal.jl")
 include("dm.jl")
