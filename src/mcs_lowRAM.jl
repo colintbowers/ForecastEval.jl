@@ -5,7 +5,7 @@ function mcs(l::Matrix{T}, method::MCSBootLowRAM)::MCSTest where {T<:Number}
 	T != Float64 && (l = Float64[ Float64(l[j, k]) for j = 1:size(l, 1), k = 1:size(l, 2) ]) #Convert input to Float64
 	numResample = method.bootinput.numresample
 	#Get bootstrap indices
-	inds = dbootinds(method.bootinput)
+	inds = dbootinds(Float64[], method.bootinput)
 	#Get matrix of loss differential sample means
 	lMuVec = vec(mean(l, dims=1))
 	iM = ltri_cart_index(collect(1:K)) #Build a matrix of lower triangular cartesian indices

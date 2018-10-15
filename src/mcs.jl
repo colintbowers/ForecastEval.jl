@@ -155,7 +155,7 @@ function mcs(l::Matrix{T}, method::MCSBoot)::MCSTest where {T<:Number}
 	T != Float64 && (l = Float64[ Float64(l[j, k]) for j = 1:size(l, 1), k = 1:size(l, 2) ]) #Convert input to Float64
 	numResample = method.bootinput.numresample
 	#Get bootstrap indices
-	inds = dbootinds(method.bootinput)
+	inds = dbootinds(Float64[], method.bootinput)
 	#Get matrix of loss differential sample means
 	lMuVec = mean(l, dims=1)
 	lDMu = Float64[ lMuVec[k] - lMuVec[j] for j = 1:K, k = 1:K  ]

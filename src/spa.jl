@@ -113,7 +113,7 @@ function spa(lD::Matrix{<:Number}, method::SPABoot)::SPATest
 	numResample = method.bootinput.numresample
 	numObs < 2 && error("Number of observations = $(numObs) which is not enough to perform a reality check")
 	numModel < 1 && error("Input dataset is empty")
-	inds = dbootinds(method.bootinput) #Get bootstrap indices
+	inds = dbootinds(Float64[], method.bootinput) #Get bootstrap indices
 	#Get hac variance estimators
 	wSqVec = Array{Float64}(undef, numModel)
 	for k = 1:numModel

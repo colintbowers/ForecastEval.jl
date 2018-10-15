@@ -86,7 +86,7 @@ function rc(lD::Matrix{<:Number}, method::RCBoot)::RCTest
 	numResample = method.bootinput.numresample
 	numObs < 2 && error("Number of observations = $(numObs) which is not enough to perform a reality check")
 	numModel < 1 && error("Input dataset is empty")
-	inds = dbootinds(method.bootinput) #Bootstrap indices
+	inds = dbootinds(Float64[], method.bootinput) #Bootstrap indices
     #Get mean loss differentials and bootstrapped mean loss differentials
 	mld = Float64[ mean(view(lD, 1:numObs, k)) for k = 1:numModel ]
 	mldBoot = Array{Float64}(undef, numModel, numResample)
