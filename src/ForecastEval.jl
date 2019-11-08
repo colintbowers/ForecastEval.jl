@@ -5,7 +5,8 @@ module ForecastEval
 #NOTES
 #-----------------------------------------------------------
 
-using 	StatsBase,
+using 	Statistics,
+	StatsBase,
 		Distributions,
 		DependentBootstrap
 
