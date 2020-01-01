@@ -41,7 +41,7 @@ struct MCSBoot <: MCSMethod
 	end
 end
 function MCSBoot(data ; alpha::Float64=0.05, basecaseindex::Int=1, kwargs...)::MCSBoot
-    return MCSBoot(alpha, BootInput(loss_diff_base_case(data, basecaseindex), kwargs...), basecaseindex)
+    return MCSBoot(alpha, BootInput(loss_diff_base_case(data, basecaseindex) ; kwargs...), basecaseindex)
 end
 
 """
@@ -66,7 +66,7 @@ struct MCSBootLowRAM <: MCSMethod
 	end
 end
 function MCSBootLowRAM(data ; alpha::Float64=0.05, basecaseindex::Int=1, kwargs...)::MCSBootLowRAM
-    return MCSBootLowRAM(alpha, BootInput(loss_diff_base_case(data, basecaseindex), kwargs...), basecaseindex)
+    return MCSBootLowRAM(alpha, BootInput(loss_diff_base_case(data, basecaseindex) ; kwargs...), basecaseindex)
 end
 
 "loss_diff_base_case <- Local function for getting loss differences relative to notional base case for purposes of estimating the block length"
@@ -236,4 +236,4 @@ function ltri_to_utri!(x::AbstractMatrix{T}) where {T<:Number}
 	return(true)
 end
 #Keyword wrapper
-mcs(l::Matrix{<:Number} ; kwargs...)::MCSTest = mcs(l, MCSBoot(l, kwargs...))
+mcs(l::Matrix{<:Number} ; kwargs...)::MCSTest = mcs(l, MCSBoot(l ; kwargs...))

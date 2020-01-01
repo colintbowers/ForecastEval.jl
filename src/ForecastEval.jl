@@ -6,7 +6,7 @@ module ForecastEval
 #-----------------------------------------------------------
 
 using 	Statistics,
-	StatsBase,
+		StatsBase,
 		Distributions,
 		DependentBootstrap
 
@@ -30,7 +30,6 @@ export 	DMMethod,
 		MCSBootLowRAM,
 		MCSTest,
 		mcs
-
 
 include("hacvariance.jl")
 include("pvaluelocal.jl")

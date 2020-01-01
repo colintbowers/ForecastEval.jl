@@ -39,7 +39,7 @@ struct SPABoot{Tk<:KernelFunction} <: SPAMethod
 	end
 end
 function SPABoot(data ; alpha::Float64=0.05, kernelfunction=KernelEpanechnikov(), bandwidth::Int=-1, kwargs...)
-    return SPABoot(alpha, BootInput(data, flevel1=mean, kwargs...), get_kernel_type(kernelfunction), bandwidth)
+    return SPABoot(alpha, BootInput(data ; flevel1=mean, kwargs...), get_kernel_type(kernelfunction), bandwidth)
 end
 
 """

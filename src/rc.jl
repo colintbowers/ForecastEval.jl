@@ -35,7 +35,7 @@ struct RCBoot <: RCMethod
         new(alpha, bootinput)
     end
 end
-RCBoot(data ; alpha::Float64=0.05, kwargs...)::RCBoot = RCBoot(alpha, BootInput(data, kwargs...))
+RCBoot(data ; alpha::Float64=0.05, kwargs...)::RCBoot = RCBoot(alpha, BootInput(data ; kwargs...))
 
 """
     RCTest(rejH0::Int, pvalue::Float64)
