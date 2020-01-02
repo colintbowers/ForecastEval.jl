@@ -2,7 +2,7 @@ name = "ForecastEval"
 uuid = "c08c26e9-7d88-5404-9cd5-c0fa6a8b90ba"
 author = ["Colin T Bowers <colintbowers@gmail.com>"]
 repo = "https://github.com/colintbowers/ForecastEval.jl.git"
-version = "0.1.0"
+version = "1.0.1"
 
 [deps]
 DependentBootstrap = "191d1da1-0f37-5779-b8ea-a655caa0c150"
